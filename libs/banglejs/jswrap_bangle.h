@@ -19,6 +19,7 @@ bool jswrap_banglejs_getLCDPower();
 void jswrap_banglejs_setLCDBrightness(JsVarFloat v);
 void jswrap_banglejs_setLCDMode(JsVar *mode);
 JsVar *jswrap_banglejs_getLCDMode();
+int jswrap_banglejs_getSteps();
 void jswrap_banglejs_setLCDOffset(int y);
 void jswrap_banglejs_setLCDTimeout(JsVarFloat timeout);
 int jswrap_banglejs_isLCDOn();

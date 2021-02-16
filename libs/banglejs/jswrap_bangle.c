@@ -1507,6 +1507,20 @@ JsVar *jswrap_banglejs_getLCDMode() {
 /*JSON{
     "type" : "staticmethod",
     "class" : "Bangle",
+    "name" : "getSteps",
+    "generate" : "jswrap_banglejs_getSteps",
+    "return" : ["int","The number of steps"],
+    "ifdef" : "BANGLEJS"
+}
+Get the current step count
+*/
+int jswrap_banglejs_getSteps() {
+  return stepCounter;
+}
+
+/*JSON{
+    "type" : "staticmethod",
+    "class" : "Bangle",
     "name" : "setLCDOffset",
     "generate" : "jswrap_banglejs_setLCDOffset",
     "params" : [
@@ -2333,7 +2347,7 @@ void jswrap_banglejs_init() {
 #ifdef STEP_COUNTER_INTERNAL
   stepWasLow = false;
 #endif
-#ifdef STEP_COUNTER_INTERNAL
+#ifdef STEP_COUNTER
   stepTimeCounter = 0;
   initAlgo();
   resetAlgo();

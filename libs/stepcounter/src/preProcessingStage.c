@@ -25,7 +25,7 @@ SOFTWARE.
 #include "filterStage.h"
 #include "utils.h"
 /*Uncomment this line to disable interpolation*/
-//#define STEP_INTERPOLATION_DISABLE
+#define STEP_INTERPOLATION_DISABLE
 static ring_buffer_t *rawBuf;
 static ring_buffer_t *ppBuf;
 static int8_t interpolationTime = 10;       //in ms
