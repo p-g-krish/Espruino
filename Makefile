@@ -642,6 +642,18 @@ ifeq ($(USE_TENSORFLOW),1)
 include make/misc/tensorflow.make
 endif
 
+ifeq ($(USE_STEP_COUNTER),1)
+  DEFINES += -DSTEP_COUNTER
+  INCLUDE += -I$(ROOT)/libs/stepcounter/include
+  SOURCES += libs/stepcounter/src/detectionStage.c  
+  SOURCES += libs/stepcounter/src/filterStage.c  
+  SOURCES += libs/stepcounter/src/postProcessingStage.c  
+  SOURCES += libs/stepcounter/src/preProcessingStage.c  
+  SOURCES += libs/stepcounter/src/ringbuffer.c  
+  SOURCES += libs/stepcounter/src/scoringStage.c  
+  SOURCES += libs/stepcounter/src/StepCountingAlgo.c
+endif
+
 
 endif # BOOTLOADER ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ DON'T USE STUFF ABOVE IN BOOTLOADER
 

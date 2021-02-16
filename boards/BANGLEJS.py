@@ -30,7 +30,8 @@ info = {
      'TERMINAL',
      'GRAPHICS', 
      'LCD_ST7789_8BIT',
-     'TENSORFLOW'     
+     'TENSORFLOW',
+     'STEP_COUNTER'     
    ],
    'makefile' : [
      'DEFINES += -DBANGLEJS_F18',

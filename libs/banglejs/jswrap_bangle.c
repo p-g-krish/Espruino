@@ -61,6 +61,11 @@
 #ifdef USE_TENSORFLOW
 #include "jswrap_tensorflow.h"
 #endif
+#ifdef STEP_COUNTER
+#include "StepCountingAlgo.h"
+#else
+#define STEP_COUNTER_INTERNAL
+#endif
 
 /*JSON{
   "type": "class",
@@ -102,7 +107,7 @@ You can also retrieve the most recent reading with `Bangle.getAccel()`.
   "type" : "event",
   "class" : "Bangle",
   "name" : "step",
-  "params" : [["up","int","The number of steps since Bangle.js was last reset"]],
+  "params" : [["steps","int","The number of steps since Bangle.js was last reset"]],
   "ifdef" : "BANGLEJS"
 }
 Called whenever a step is detected by Bangle.js's pedometer.
@@ -494,11 +499,6 @@ int accelGestureEndThresh = 2000*2000;
 int accelGestureInactiveCount = 4;
 /// how many samples must a gesture have before we notify about it?
 int accelGestureMinLength = 10;
-// Step data
-/// How low must acceleration magnitude squared get before we consider the next rise a step?
-int stepCounterThresholdLow = (8192-80)*(8192-80);
-/// How high must acceleration magnitude squared get before we consider it a step?
-int stepCounterThresholdHigh = (8192+80)*(8192+80);
 /// How much acceleration to register a twist of the watch strap?
 int twistThreshold = 800;
 /// Maximum acceleration in Y to trigger a twist (low Y means watch is facing the right way up)
@@ -506,10 +506,23 @@ int twistMaxY = -800;
 /// How little time (in ms) must a twist take from low->high acceleration?
 int twistTimeout = 1000;
 
-/// Current steps since reset
-uint32_t stepCounter;
+#ifdef STEP_COUNTER_INTERNAL
+// Step data
+/// How low must acceleration magnitude squared get before we consider the next rise a step?
+int stepCounterThresholdLow = (8192-80)*(8192-80);
+/// How high must acceleration magnitude squared get before we consider it a step?
+int stepCounterThresholdHigh = (8192+80)*(8192+80);
 /// has acceleration counter passed stepCounterThresholdLow?
 bool stepWasLow;
+#endif
+#ifdef STEP_COUNTER
+int64_t stepTimeCounter = 0;
+#endif
+/// Current steps since reset
+uint32_t stepCounter;
+
+
+
 /// What state was the touchscreen last in
 typedef enum {
   TS_NONE = 0,
@@ -913,6 +926,7 @@ void peripheralPollHandler() {
       bangleTasks |= JSBT_FACE_UP;
       jshHadEvent();
     }
+#ifdef STEP_COUNTER_INTERNAL
     // check for step counter
     if (accMagSquared < stepCounterThresholdLow)
       stepWasLow = true;
@@ -922,6 +936,17 @@ void peripheralPollHandler() {
       bangleTasks |= JSBT_STEP_EVENT;
       jshHadEvent();
     }
+#endif#
+#ifdef STEP_COUNTER
+    stepTimeCounter += pollInterval;
+    processSample(stepTimeCounter, acc.x, acc.y, acc.z);
+    int32_t s = getSteps();
+    if (s!=stepCounter) {
+      stepCounter = s;
+      bangleTasks |= JSBT_STEP_EVENT;
+      jshHadEvent();
+    }
+#endif
     // check for twist action
     if (twistTimer < TIMER_MAX)
       twistTimer += pollInterval;
@@ -1598,8 +1623,10 @@ void jswrap_banglejs_setOptions(JsVar *options) {
       {"gestureEndThresh", JSV_INTEGER, &accelGestureEndThresh},
       {"gestureInactiveCount", JSV_INTEGER, &accelGestureInactiveCount},
       {"gestureMinLength", JSV_INTEGER, &accelGestureMinLength},
+#ifdef STEP_COUNTER_INTERNAL
       {"stepCounterThresholdLow", JSV_INTEGER, &stepCounterThresholdLow},
       {"stepCounterThresholdHigh", JSV_INTEGER, &stepCounterThresholdHigh},
+#endif
       {"twistThreshold", JSV_INTEGER, &twistThreshold},
       {"twistTimeout", JSV_INTEGER, &twistTimeout},
       {"twistMaxY", JSV_INTEGER, &twistMaxY},
@@ -2303,7 +2330,15 @@ void jswrap_banglejs_init() {
 
   // Accelerometer variables init
   stepCounter = 0;
+#ifdef STEP_COUNTER_INTERNAL
   stepWasLow = false;
+#endif
+#ifdef STEP_COUNTER_INTERNAL
+  stepTimeCounter = 0;
+  initAlgo();
+  resetAlgo();
+  resetSteps();
+#endif
 #ifdef MAG_I2C
 #ifdef MAG_DEVICE_GMC303
   // compass init
