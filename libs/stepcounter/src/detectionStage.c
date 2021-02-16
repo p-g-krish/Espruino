@@ -32,7 +32,7 @@ static int64_t mean = 0;
 static int64_t std = 0;
 static int64_t count = 0;
 static int16_t threshold_int = 2;
-static int16_t threshold_frac = 2;
+static int16_t threshold_frac = 4;
 
 void initDetectionStage(ring_buffer_t *peakScoreBufIn, ring_buffer_t *peakBufIn)
 {

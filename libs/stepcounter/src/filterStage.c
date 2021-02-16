@@ -26,8 +26,8 @@ SOFTWARE.
 #include "scoringStage.h"
 static ring_buffer_t *ppBuf;
 static ring_buffer_t *smoothBuf;
-static int32_t coeffs[13] = {1687988, 58749795, 16299118, 36044776, 63539094, 8928125, 100000000, 8928125, 63539094, 36044776, 16299118, 58749795, 1687988};
-static int32_t filterSum = 525454400;
+static int32_t coeffs[13] = { 40,  443,  1772,   4455,   8127,   11446,   12795,   11446,   8127,  4455,  1772,  443,  40 };
+static int32_t filterSum = 65536;
 static int8_t filterLen = 13;
 
 void

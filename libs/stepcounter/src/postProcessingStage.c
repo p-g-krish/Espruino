@@ -25,7 +25,7 @@ SOFTWARE.
 #include "postProcessingStage.h"
 static ring_buffer_t *peakBuf;
 static data_point_t lastDataPoint;
-static int16_t timeThreshold = 200;
+static int16_t timeThreshold = 280;
 static void (*stepCallback)(void);
 void initPostProcessingStage(ring_buffer_t *peakBufIn, void (*stepCallbackIn)(void))
 {
