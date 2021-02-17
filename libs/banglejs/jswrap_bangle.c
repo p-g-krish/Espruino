@@ -940,8 +940,10 @@ void peripheralPollHandler() {
 #ifdef STEP_COUNTER
     stepTimeCounter += pollInterval;
     // we've come out of powersave, reset the algorithm
-    if (bangleTasks & JSBT_ACCEL_INTERVAL_DEFAULT)
+    if (bangleTasks & JSBT_ACCEL_INTERVAL_DEFAULT) {
+      stepTimeCounter = 0;
       resetAlgo();
+    }
     // only do step counting if power save is off
     if (powerSaveTimer < POWER_SAVE_TIMEOUT) {
       processSample(stepTimeCounter, acc.x, acc.y, acc.z);
