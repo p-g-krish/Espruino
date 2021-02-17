@@ -939,12 +939,18 @@ void peripheralPollHandler() {
 #endif#
 #ifdef STEP_COUNTER
     stepTimeCounter += pollInterval;
-    processSample(stepTimeCounter, acc.x, acc.y, acc.z);
-    int32_t s = getSteps();
-    if (s!=stepCounter) {
-      stepCounter = s;
-      bangleTasks |= JSBT_STEP_EVENT;
-      jshHadEvent();
+    // we've come out of powersave, reset the algorithm
+    if (bangleTasks & JSBT_ACCEL_INTERVAL_DEFAULT)
+      resetAlgo();
+    // only do step counting if power save is off
+    if (powerSaveTimer < POWER_SAVE_TIMEOUT) {
+      processSample(stepTimeCounter, acc.x, acc.y, acc.z);
+      int32_t s = getSteps();
+      if (s!=stepCounter) {
+        stepCounter = s;
+        bangleTasks |= JSBT_STEP_EVENT;
+        jshHadEvent();
+      }
     }
 #endif
     // check for twist action
