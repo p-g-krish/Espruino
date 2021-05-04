@@ -40,7 +40,7 @@ typedef struct data_point_t data_point_t;
 struct data_point_t
 {
   magnitude_t magnitude;
-  time_t time;
+  st_time_t time;
 };
 /**
  * The size of a ring buffer.

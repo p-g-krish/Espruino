@@ -39,7 +39,7 @@ static void (*nextStage)(void);
 
 static magnitude_t mean = 0;
 static accumulator_t std = 0;
-static time_t count = 0;
+static st_time_t count = 0;
 static int16_t threshold_int = 0;
 static int16_t threshold_frac = 6;
 
@@ -70,7 +70,7 @@ void detectionStage(void)
         else if (count == 2)
         {
             mean = (mean + dataPoint.magnitude) / 2;
-            std = sqrt(((dataPoint.magnitude - mean) * (dataPoint.magnitude - mean)) + ((oMean - mean) * (oMean - mean))) / 2;
+            std = i64_sqrt(((dataPoint.magnitude - mean) * (dataPoint.magnitude - mean)) + ((oMean - mean) * (oMean - mean))) / 2;
         }
         else
         {
@@ -78,7 +78,7 @@ void detectionStage(void)
             accumulator_t part1 = ((std * std) / (count - 1)) * (count - 2);
             accumulator_t part2 = ((oMean - mean) * (oMean - mean));
             accumulator_t part3 = ((dataPoint.magnitude - mean) * (dataPoint.magnitude - mean)) / count;
-            std = (accumulator_t)sqrt(part1 + part2 + part3);
+            std = (accumulator_t)i64_sqrt(part1 + part2 + part3);
         }
         if (count > 15)
         {

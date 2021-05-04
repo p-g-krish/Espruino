@@ -652,6 +652,7 @@ ifeq ($(USE_STEP_COUNTER),1)
   SOURCES += libs/stepcounter/src/ringbuffer.c  
   SOURCES += libs/stepcounter/src/scoringStage.c  
   SOURCES += libs/stepcounter/src/StepCountingAlgo.c
+  SOURCES += libs/stepcounter/src/motionDetectStage.c
 endif
 
 

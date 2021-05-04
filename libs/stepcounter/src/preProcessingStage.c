@@ -34,9 +34,9 @@ static FILE *interpolatedFile;
 static ring_buffer_t *inBuff;
 static ring_buffer_t *outBuff;
 static void (*nextStage)(void);
-static uint8_t samplingPeriod = 80;   //in ms, this can be smaller than the actual sampling frequency, but it will result in more computations
-static int16_t timeScalingFactor = 1; //use this for adjusting time to ms, in case the clock has higher precision
-static time_t lastSampleTime = -1;
+static uint8_t samplingPeriod = 80;    //in ms, this can be smaller than the actual sampling frequency, but it will result in more computations
+static uint16_t timeScalingFactor = 1; //use this for adjusting time to ms, in case the clock has higher precision
+static st_time_t lastSampleTime = -1;
 
 void initPreProcessStage(ring_buffer_t *pInBuff, ring_buffer_t *pOutBuff, void (*pNextStage)(void))
 {
@@ -75,11 +75,11 @@ static void outPutDataPoint(data_point_t dp)
 #endif
 }
 
-void preProcessSample(time_t time, accel_t x, accel_t y, accel_t z)
+void preProcessSample(st_time_t time, accel_t x, accel_t y, accel_t z)
 {
     time = time / timeScalingFactor;
 
-    magnitude_t magnitude = (magnitude_t)sqrt((magnitude_t)(x * x + y * y + z * z));
+    magnitude_t magnitude = (magnitude_t)i64_sqrt((accumulator_t)(x * x + y * y + z * z));
     data_point_t dataPoint;
     dataPoint.time = time;
     dataPoint.magnitude = magnitude;
@@ -92,7 +92,7 @@ void preProcessSample(time_t time, accel_t x, accel_t y, accel_t z)
     }
 #endif
 
-#ifdef STEP_INTERPOLATION_DISABLE
+#ifdef SKIP_INTERPOLATION
     outPutDataPoint(dataPoint);
 #else
     ring_buffer_queue(inBuff, dataPoint);
@@ -117,7 +117,7 @@ void preProcessSample(time_t time, accel_t x, accel_t y, accel_t z)
 
             for (int8_t i = 1; i < numberOfPoints; i++)
             {
-                time_t interpTime = lastSampleTime + samplingPeriod;
+                st_time_t interpTime = lastSampleTime + samplingPeriod;
 
                 if (dp1.time <= interpTime && interpTime <= dp2.time)
                 {

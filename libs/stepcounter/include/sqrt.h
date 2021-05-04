@@ -25,7 +25,7 @@ SOFTWARE.
 #define STEP_COUNTING_ALGO_UTILS_H
 #include <stdint.h>
 
-static int64_t sqrt(int64_t number)
+static int64_t i64_sqrt(int64_t number)
 {
   int64_t base, i, y;
   base = 67108864; //2^24
