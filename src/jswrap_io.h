@@ -11,6 +11,9 @@
  * JavaScript Hardware IO Functions
  * ----------------------------------------------------------------------------
  */
+#ifndef JSWRAP_IO_H_
+#define JSWRAP_IO_H_
+
 #include "jsvar.h"
 #include "jsinteractive.h"
 
@@ -19,7 +22,7 @@ void jswrap_io_poke(JsVarInt addr, JsVar *data, int wordSize);
 
 void jswrap_io_analogWrite(Pin pin, JsVarFloat value, JsVar *options);
 void jswrap_io_digitalPulse(Pin pin, bool value, JsVar *times);
-void jswrap_io_digitalWrite(JsVar *pinVar, JsVarInt value);
+void jswrap_io_digitalWrite(JsVar *pinVar, JsVar *value);
 JsVarInt jswrap_io_digitalRead(JsVar *pinVar);
 void jswrap_io_pinMode(Pin pin, JsVar *mode, bool automatic);
 JsVar *jswrap_io_getPinMode(Pin pin);
@@ -31,3 +34,5 @@ void jswrap_interface_clearWatch(JsVar *idVarArr);
 int jswrap_interface_setWatch_int(void(*callback)(), Pin pin, bool repeat, int edge);
 /// function for internal use
 void jswrap_interface_clearWatch_int(int watchNumber);
+
+#endif // JSWRAP_IO_H_

@@ -19,6 +19,7 @@
 #include "jspin.h"
 
 typedef enum {
+  UET_NONE, ///< Nothing
   UET_WAKEUP, ///< Does nothing except wake the device up!
   UET_SET, ///< Set a pin to a value
   UET_EXECUTE, ///< Execute something
@@ -27,6 +28,9 @@ typedef enum {
   UET_READ_BYTE, ///< Read a byte from an analog input
   UET_WRITE_SHORT, ///< Write a short to a DAC/Timer
   UET_READ_SHORT, ///< Read a short from an analog input
+#endif
+#ifdef ESPR_USE_STEPPER_TIMER
+  UET_STEP, ///< Write stepper motor
 #endif
 } PACKED_FLAGS UtilTimerEventType;
 
@@ -49,12 +53,12 @@ typedef enum {
   ((T)==UET_WRITE_SHORT))
 #endif
 
-#define UTILTIMERTASK_PIN_COUNT (4)
+#define UTILTIMERTASK_PIN_COUNT (8)
 
 typedef struct UtilTimerTaskSet {
-  Pin pins[UTILTIMERTASK_PIN_COUNT]; ///< pins to set
+  Pin pins[UTILTIMERTASK_PIN_COUNT]; ///< pins to set (must be in same location as UtilTimerTaskStep.pins)
   uint8_t value; ///< value to set pins to
-} PACKED_FLAGS UtilTimerTaskSet;
+} PACKED_FLAGS UtilTimerTaskSet; // 9 bytes
 
 /** Task to write to a specific pin function - eg. a DAC or Timer or to read from an Analog
  * To send once, set var=buffer1, currentBuffer==nextBuffer==0
@@ -68,28 +72,37 @@ typedef struct UtilTimerTaskBuffer {
   unsigned short currentValue; ///< current value being written (for writes)
   unsigned short charIdx; ///< Index of character in variable
   unsigned short endIdx; ///< Final index before we skip to the next var
-  union {
-    JshPinFunction pinFunction; ///< Pin function to write to
-    Pin pin; ///< Pin to read from
-  };
-} PACKED_FLAGS UtilTimerTaskBuffer;
+  Pin pin; ///< Pin to read from/write to
+  Pin npin; ///< If we're doing 2 pin output, the pin to write the negated value to
+} PACKED_FLAGS UtilTimerTaskBuffer; // ~16 bytes
 
 typedef void (*UtilTimerTaskExecFn)(JsSysTime time, void* userdata);
 
 typedef struct UtilTimerTaskExec {
   UtilTimerTaskExecFn fn;
   void *userdata;
-} PACKED_FLAGS UtilTimerTaskExec;
+} PACKED_FLAGS UtilTimerTaskExec; // ~8 bytes
 
+#ifdef ESPR_USE_STEPPER_TIMER
+typedef struct UtilTimerTaskStep {
+  Pin pins[4];  //< the 4 pins for the stepper motor (must be in same location as UtilTimerTaskSet.pins)
+  int16_t steps;           //< How many steps? When this reaches 0 the timer task is removed
+  uint8_t pIndex;          //< Index in 8 entry pattern array
+  uint8_t pattern[4];      //< step pattern (2 patterns per array element)
+} PACKED_FLAGS UtilTimerTaskStep; // 11 bytes
+#endif
 
 typedef union UtilTimerTaskData {
   UtilTimerTaskSet set;
   UtilTimerTaskBuffer buffer;
   UtilTimerTaskExec execute;
-} UtilTimerTaskData;
+#ifdef ESPR_USE_STEPPER_TIMER
+  UtilTimerTaskStep step;
+#endif
+} UtilTimerTaskData; // max of the others = ~16 bytes
 
 typedef struct UtilTimerTask {
-  int time; // time at which to set pins (JshSysTime, cropped to 32 bits)
+  int time; // time in future (not system time) at which to set pins (JshSysTime scaling, cropped to 32 bits)
   unsigned int repeatInterval; // if nonzero, repeat the timer
   UtilTimerTaskData data; // data used when timer is hit
   UtilTimerEventType type; // the type of this task - do we set pin(s) or read/write data
@@ -103,20 +116,27 @@ void jstUtilTimerWaitEmpty();
 /// Return true if the utility timer is running
 bool jstUtilTimerIsRunning();
 
+/// Get the current timer offset - supply this when adding >1 timer task to ensure they are all executed at the same time relative to each other
+uint32_t jstGetUtilTimerOffset();
+
 /// Return true if a timer task for the given pin exists (and set 'task' to it)
 bool jstGetLastPinTimerTask(Pin pin, UtilTimerTask *task);
 
 /// Return true if a timer task for the given variable exists (and set 'task' to it)
 bool jstGetLastBufferTimerTask(JsVar *var, UtilTimerTask *task);
 
-/// returns false if timer queue was full... Changes the state of one or more pins at a certain time (using a timer)
-bool jstPinOutputAtTime(JsSysTime time, Pin *pins, int pinCount, uint8_t value);
+/** returns false if timer queue was full... Changes the state of one or more pins at a certain time in the future (using a timer)
+ * See utilTimerInsertTask for notes on timerOffset
+ */
+bool jstPinOutputAtTime(JsSysTime time, uint32_t *timerOffset, Pin *pins, int pinCount, uint8_t value);
 
 // Do software PWM on the given pin, using the timer IRQs
 bool jstPinPWM(JsVarFloat freq, JsVarFloat dutyCycle, Pin pin);
 
-/// Execute the given function repeatedly after the given time period. If period=0, don't repeat. True on success or false on failure to schedule
-bool jstExecuteFn(UtilTimerTaskExecFn fn, void *userdata, JsSysTime startTime, uint32_t period);
+/** Execute the given function repeatedly after the given time period. If period=0, don't repeat. True on success or false on failure to schedule
+ * See utilTimerInsertTask for notes on timerOffset
+ */
+bool jstExecuteFn(UtilTimerTaskExecFn fn, void *userdata, JsSysTime startTime, uint32_t period, uint32_t *timerOffset);
 
 /// Stop executing the given function
 bool jstStopExecuteFn(UtilTimerTaskExecFn fn, void *userdata);
@@ -129,11 +149,14 @@ bool jstSetWakeUp(JsSysTime period);
  * before the wakeup event */
 void jstClearWakeUp();
 
-/// Start writing a string out at the given period between samples
-bool jstStartSignal(JsSysTime startTime, JsSysTime period, Pin pin, JsVar *currentData, JsVar *nextData, UtilTimerEventType type);
+/// Start writing a string out at the given period between samples. 'time' is the time relative to the current time (0 = now). pin_neg is optional pin for writing opposite of signal to
+bool jstStartSignal(JsSysTime startTime, JsSysTime period, Pin pin, Pin npin, JsVar *currentData, JsVar *nextData, UtilTimerEventType type);
 
-/// Stop a timer task
+/// Remove the task that uses the buffer 'var'
 bool jstStopBufferTimerTask(JsVar *var);
+
+/// Remove the task that uses the given pin
+bool jstStopPinTimerTask(Pin pin);
 
 /// Stop ALL timer tasks (including digitalPulse - use this when resetting the VM)
 void jstReset();
@@ -149,8 +172,12 @@ void jstDumpUtilityTimers();
 need to be called by anything outside jstimer.c */
 void  jstRestartUtilTimer();
 
-// Queue a task up to be executed when a timer fires... return false on failure
-bool utilTimerInsertTask(UtilTimerTask *task);
+/** Queue a task up to be executed when a timer fires... return false on failure.
+ * task.time is the delay at which to execute the task. If timerOffset!==NULL then
+ * task.time is relative to the time at which timerOffset=jstGetUtilTimerOffset().
+ * This allows pulse trains/etc to be scheduled in sync.
+ */
+bool utilTimerInsertTask(UtilTimerTask *task, uint32_t *timerOffset);
 
 /// Remove the task that that 'checkCallback' returns true for. Returns false if none found
 bool utilTimerRemoveTask(bool (checkCallback)(UtilTimerTask *task, void* data), void *checkCallbackData);

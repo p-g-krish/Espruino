@@ -14,6 +14,9 @@
 
 #include "jsvar.h"
 #include "bluetooth.h"
+#if PEER_MANAGER_ENABLED
+#include "peer_manager_types.h"
+#endif
 
 #define BLE_SCAN_EVENT                  JS_EVENT_PREFIX"blescan"
 #define BLE_WRITE_EVENT                 JS_EVENT_PREFIX"blew"
@@ -29,12 +32,14 @@
 #define BLE_NAME_HID_DATA               "BLE_HID_D"
 #define BLE_NAME_NUS                    "BLE_UART"
 #define BLE_NAME_FLAGS                  "BLE_FLAGS"
-#define BLE_NAME_GATT_SERVER            "BLE_GATTS"
+#define BLE_NAME_GATT_SERVER            "BLE_GATTSx" // x is replaced with the index in m_central_conn_handles
+#define BLE_NAME_GATT_SERVER_LEN        11 // include null terminator
 #define BLE_NAME_SECURITY               "BLE_SEC"
 #define BLE_NAME_MAC_ADDRESS            "BLE_MAC"
 #if ESPR_BLUETOOTH_ANCS
 #define BLE_NAME_ANCS                   "BLE_ANCS"
 #define BLE_NAME_AMS                    "BLE_AMS"
+#define BLE_NAME_CTS                    "BLE_CTS"
 #endif
 
 typedef enum {
@@ -68,6 +73,11 @@ const char *bleVarToUUID(ble_uuid_t *uuid, JsVar *v);
 /// Same as bleVarToUUID, but unlocks v
 const char *bleVarToUUIDAndUnLock(ble_uuid_t *uuid, JsVar *v);
 
+#if PEER_MANAGER_ENABLED && ESPR_BLE_PRIVATE_ADDRESS_SUPPORT
+bool bleVarToPrivacy(JsVar *options, pm_privacy_params_t *privacy);
+JsVar *blePrivacyToVar(pm_privacy_params_t *privacy);
+#endif // PEER_MANAGER_ENABLED && ESPR_BLE_PRIVATE_ADDRESS_SUPPORT
+
 /// Queue an event on the 'NRF' object. Also calls jshHadEvent()
 void bleQueueEventAndUnLock(const char *name, JsVar *data);
 
@@ -76,3 +86,13 @@ void bleGetWriteEventName(char *eventName, uint16_t handle);
 
 /// Look up the characteristic's handle from the UUID. returns BLE_GATT_HANDLE_INVALID if not found
 uint16_t bleGetGATTHandle(ble_uuid_t char_uuid);
+
+/** Add a task to the queue to be executed (to be called mainly from IRQ-land) - with a buffer of data */
+void jsble_queue_pending_buf(BLEPending blep, uint16_t data, char *ptr, size_t len);
+
+/** Add a task to the queue to be executed (to be called mainly from IRQ-land) - with simple data */
+void jsble_queue_pending(BLEPending blep, uint16_t data);
+
+/* Handler for common event types (between nRF52/ESP32). Called first
+ * from ESP32/nRF52 jsble_exec_pending function */
+bool jsble_exec_pending_common(BLEPending blep, uint16_t data, unsigned char *buffer, size_t bufferLen);

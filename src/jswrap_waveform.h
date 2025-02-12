@@ -11,12 +11,16 @@
  * JavaScript methods for Waveforms (eg. Audio)
  * ----------------------------------------------------------------------------
  */
+#ifndef JSWRAP_WAVEFORM_H_
+#define JSWRAP_WAVEFORM_H_
+
 #include "jshardware.h"
 
 bool jswrap_waveform_idle();
 void jswrap_waveform_kill();
-JsVar *jswrap_waveform_constructor(int samples, JsVar *options);
+JsVar *jswrap_waveform_constructor(JsVar *samples, JsVar *options);
 void jswrap_waveform_startOutput(JsVar *waveform, Pin pin, JsVarFloat freq, JsVar *options);
 void jswrap_waveform_startInput(JsVar *waveform, Pin pin, JsVarFloat freq, JsVar *options);
 void jswrap_waveform_stop(JsVar *waveform);
 
+#endif // JSWRAP_WAVEFORM_H_

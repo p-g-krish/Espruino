@@ -28,7 +28,7 @@
 #include "stm32_ws2812b_driver.h"
 #endif
 
-#include <jswrap_neopixel.h>
+#include "jswrap_neopixel.h"
 #include "jsvariterator.h"
 #include "jspininfo.h"
 #include "jshardware.h"
@@ -58,8 +58,8 @@ implementation on some devices - hence this library to simplify things.
     ["data","JsVar","The data to write to the LED strip (must be a multiple of 3 bytes long)"]
   ]
 }
-Write to a strip of NeoPixel/WS281x/APA104/APA106/SK6812-style LEDs
-attached to the given pin.
+Write to a strip of NeoPixel/WS281x/APA104/APA106/SK6812-style LEDs attached to
+the given pin.
 
 ```
 // set just one pixel, red, green, blue
@@ -86,25 +86,28 @@ setInterval(function() {
 
 **Note:**
 
-* Different types of LED have the data in different orders - so don't
-be surprised by RGB or BGR orderings!
+* Different types of LED have the data in different orders - so don't be
+surprised by RGB or BGR orderings!
 
-* Some LED strips (SK6812) actually take 4 bytes per LED (red, green, blue and white).
-These are still supported but the array of data supplied must still be a multiple of 3
-bytes long. Just round the size up - it won't cause any problems.
+* Some LED strips (SK6812) actually take 4 bytes per LED (red, green, blue and
+white). These are still supported but the array of data supplied must still be a
+multiple of 3 bytes long. Just round the size up - it won't cause any problems.
 
-* On some platforms like STM32, pins capable of hardware SPI MOSI
-are required.
+* On some platforms like STM32, pins capable of hardware SPI MOSI are required.
 
-* Espruino devices tend to have 3.3v IO, while WS2812/etc run
-off of 5v. Many WS2812 will only register a logic '1' at 70%
-of their input voltage - so if powering them off 5v you will not
-be able to send them data reliably. You can work around this by
-powering the LEDs off a lower voltage (for example 3.7v from a LiPo
-battery), can put the output into the `af_opendrain` state and use
-a pullup resistor to 5v on STM32 based boards (nRF52 are not 5v tolerant
-so you can't do this), or can use a level shifter to shift the voltage up
-into the 5v range.
+* On STM32, `neopixel.write` chooses a hardware SPI device to output the signal on
+and uses that. However in order to avoid spikes in the output, if that hardware device is *already
+initialised* it will not be re-initialised. This means that if the SPI device was already in use,
+you may have to use `SPIx.setup({baud:3200000, mosi:the_pin})` to force it to be re-setup on the pin.
+
+* Espruino devices tend to have 3.3v IO, while WS2812/etc run off of 5v. Many
+WS2812 will only register a logic '1' at 70% of their input voltage - so if
+powering them off 5v you will not be able to send them data reliably. You can
+work around this by powering the LEDs off a lower voltage (for example 3.7v from
+a LiPo battery), can put the output into the `af_opendrain` state and use a
+pullup resistor to 5v on STM32 based boards (nRF52 are not 5v tolerant so you
+can't do this), or can use a level shifter to shift the voltage up into the 5v
+range.
 */
 void jswrap_neopixel_write(Pin pin, JsVar *data) {
   JSV_GET_AS_CHAR_ARRAY(rgbData, rgbSize, data);
@@ -113,11 +116,11 @@ void jswrap_neopixel_write(Pin pin, JsVar *data) {
     return;
   }
   if (rgbSize == 0) {
-    jsExceptionHere(JSET_ERROR, "Data must be a non empty array.");
+    jsExceptionHere(JSET_ERROR, "Data must be a non empty array");
     return;
   }
   if (rgbSize % 3 != 0) {
-    jsExceptionHere(JSET_ERROR, "Data length must be a multiple of 3 (RGB).");
+    jsExceptionHere(JSET_ERROR, "Data length must be a multiple of 3 (RGB)");
     return;
   }
 
@@ -137,10 +140,12 @@ bool neopixelWrite(Pin pin, unsigned char *rgbData, size_t rgbSize) {
 
 #elif defined(STM32) // ----------------------------------------------------------------
 
+extern Pin jshNeoPixelPin; ///< The currently setup Neopixel pin (set by jswrap_neopixel). This is reset to PIN_UNDEFINED if we think anything could have messed it up
+
 // this one could potentially work on other platforms as well...
 bool neopixelWrite(Pin pin, unsigned char *rgbData, size_t rgbSize) {
   if (!jshIsPinValid(pin)) {
-    jsExceptionHere(JSET_ERROR, "Pin is not valid.");
+    jsExceptionHere(JSET_ERROR, "Pin is not valid");
     return false;
   }
   JshPinFunction spiDevice = 0;
@@ -153,14 +158,17 @@ bool neopixelWrite(Pin pin, unsigned char *rgbData, size_t rgbSize) {
   }
   IOEventFlags device = jshGetFromDevicePinFunction(spiDevice);
   if (!spiDevice || !device) {
-    jsExceptionHere(JSET_ERROR, "No suitable SPI device found for this pin\n");
+    jsExceptionHere(JSET_ERROR, "No suitable SPI device found for this pin");
     return false;
   }
   JshSPIInfo inf;
   jshSPIInitInfo(&inf);
   inf.baudRate = 3200000;
   inf.pinMOSI = pin;
-  jshSPISetup(device, &inf);
+  if (jshNeoPixelPin != pin) {
+    jshSPISetup(device, &inf);
+    jshNeoPixelPin = pin;
+  }
   jshSPISet16(device, true); // 16 bit output
   // we're just sending (no receive)
   jshSPISetReceive(device, false);
@@ -179,7 +187,7 @@ bool neopixelWrite(Pin pin, unsigned char *rgbData, size_t rgbSize) {
 bool neopixelWrite(Pin pin, unsigned char *rgbData, size_t rgbSize) {
 #ifdef NRF52_SERIES
   if (!jshIsPinValid(pin)) {
-    jsExceptionHere(JSET_ERROR, "Pin is not valid.");
+    jsExceptionHere(JSET_ERROR, "Pin is not valid");
     return false;
   }
   return !i2s_ws2812b_drive_xfer((rgb_led_t *)rgbData, rgbSize/3, pinInfo[pin].pin);
@@ -200,7 +208,7 @@ static inline uint32_t _getCycleCount(void) {
 
 bool neopixelWrite(Pin pin, unsigned char *rgbData, size_t rgbSize) {
   if (!jshIsPinValid(pin)) {
-    jsExceptionHere(JSET_ERROR, "Pin is not valid.");
+    jsExceptionHere(JSET_ERROR, "Pin is not valid");
     return false;
   }
   if (!jshGetPinStateIsManual(pin))

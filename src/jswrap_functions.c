@@ -13,12 +13,41 @@
  * JavaScript methods and functions in the global namespace
  * ----------------------------------------------------------------------------
  */
+#ifndef ESPR_EMBED
 #include <math.h>
+#endif
 #include "jswrap_functions.h"
+#include "jswrap_json.h" // for print/console.log
 #include "jslex.h"
 #include "jsparse.h"
 #include "jsinteractive.h"
 
+
+JsVar *jswrap_global() {
+  return jsvLockAgain(execInfo.root);
+}
+/*JSON{
+  "type" : "variable",
+  "name" : "global",
+  "generate" : "jswrap_global",
+  "return" : ["JsVar","The global scope"]
+}
+A reference to the global scope, where everything is defined.
+
+`global` is used in Node.js. Consider using the identical `globalThis` as it was introduced in the ECMAScript spec.
+*/
+/*JSON{
+  "type" : "variable",
+  "name" : "globalThis",
+  "generate" : "jswrap_global",
+  "return" : ["JsVar","The global scope"],
+  "typescript" : "// globalThis - builtin"
+}
+A reference to the global scope, where everything is defined.
+
+This is identical to `global` but was introduced in the ECMAScript spec.
+*/
+// no typescript generated for globalThis, it's already builtin to typescript
 
 /*JSON{
   "type" : "variable",
@@ -37,18 +66,23 @@ hello("Test")  // 1 ["Test"]
 hello(1,2,3)   // 3 [1,2,3]
 ```
 
-**Note:** Due to the way Espruino works this is doesn't behave exactly
-the same as in normal JavaScript. The length of the arguments array
-will never be less than the number of arguments specified in the 
-function declaration: `(function(a){ return arguments.length; })() == 1`.
-Normal JavaScript interpreters would return `0` in the above case.
+**Note:** Due to the way Espruino works this is doesn't behave exactly the same
+as in normal JavaScript. The length of the arguments array will never be less
+than the number of arguments specified in the function declaration:
+`(function(a){ return arguments.length; })() == 1`. Normal JavaScript
+interpreters would return `0` in the above case.
 
  */
 extern JsExecInfo execInfo;
 JsVar *jswrap_arguments() {
   JsVar *scope = 0;
-  if (execInfo.scopesVar)
+#ifdef ESPR_NO_LET_SCOPING
+  if (execInfo.scopesVar) // if no let scoping, the top of the scopes list is the function
     scope = jsvGetLastArrayItem(execInfo.scopesVar);
+#else
+  if (execInfo.baseScope) // if let scoping, the top of the scopes list may just be a scope. Use baseScope instead
+    scope = jsvLockAgain(execInfo.baseScope);
+#endif
   if (!jsvIsFunction(scope)) {
     jsExceptionHere(JSET_ERROR, "Can only use 'arguments' variable inside a function");
     return 0;
@@ -106,6 +140,11 @@ JsVar *jswrap_function_constructor(JsVar *args) {
     jsvObjectIteratorNext(&it);
   }
   jsvObjectIteratorFree(&it);
+  if (!jsvIsString(v)) {
+    jsExceptionHere(JSET_TYPEERROR,"Function code must be a String, got '%t'", v);
+    jsvUnLock2(v,fn);
+    return NULL;
+  }
   jsvObjectSetChildAndUnLock(fn, JSPARSE_FUNCTION_CODE_NAME, v);
   return fn;
 }
@@ -124,7 +163,7 @@ Evaluate a string containing JavaScript code
 JsVar *jswrap_eval(JsVar *v) {
   if (!v) return 0;
   JsVar *s = jsvAsString(v); // get as a string
-  JsVar *result = jspEvaluateVar(s, execInfo.thisVar, 0);
+  JsVar *result = jspEvaluateVar(s, 0, 0); // don't set scope, so we use the current scope
   jsvUnLock(s);
   return result;
 }
@@ -135,7 +174,7 @@ JsVar *jswrap_eval(JsVar *v) {
   "generate" : "jswrap_parseInt",
   "params" : [
     ["string","JsVar",""],
-    ["radix","JsVar","The Radix of the string (optional)"]
+    ["radix","JsVar","[optional] The Radix of the string"]
   ],
   "return" : ["JsVar","The integer value of the string (or NaN)"]
 }
@@ -169,7 +208,7 @@ JsVar *jswrap_parseInt(JsVar *v, JsVar *radixVar) {
   // probably had to miss some stuff off the end of the string
   // in jsvGetString
   if (endOfInteger == &buffer[sizeof(buffer)-1]) {
-    jsExceptionHere(JSET_ERROR, "String too big to convert to integer\n");
+    jsExceptionHere(JSET_ERROR, "String too big to convert to number");
     return jsvNewFromFloat(NAN);
   }
   return jsvNewFromLongInteger(i);
@@ -197,7 +236,7 @@ JsVarFloat jswrap_parseFloat(JsVar *v) {
   // probably had to miss some stuff off the end of the string
   // in jsvGetString
   if (endOfFloat == &buffer[sizeof(buffer)-1]) {
-    jsExceptionHere(JSET_ERROR, "String too big to convert to float\n");
+    jsExceptionHere(JSET_ERROR, "String too big to convert to number");
     return NAN;
   }
   return f;
@@ -212,7 +251,8 @@ JsVarFloat jswrap_parseFloat(JsVar *v) {
   ],
   "return" : ["bool","True is the value is a Finite number, false if not."]
 }
-Is the parameter a finite num,ber or not? If needed, the parameter is first converted to a number.
+Is the parameter a finite number or not? If needed, the parameter is first
+converted to a number.
  */
 bool jswrap_isFinite(JsVar *v) {
   JsVarFloat f = jsvGetFloat(v);
@@ -235,7 +275,7 @@ bool jswrap_isNaN(JsVar *v) {
       jsvIsObject(v) ||
       ((jsvIsFloat(v)||jsvIsArray(v)) && isnan(jsvGetFloat(v)))) return true;
   if (jsvIsString(v)) {
-    // this is where is can get a bit crazy
+    // this is where it can get a bit crazy
     bool allWhiteSpace = true;
     JsvStringIterator it;
     jsvStringIteratorNew(&it,v,0);
@@ -286,10 +326,10 @@ Encode the supplied string (or array) into a base64 string
  */
 JsVar *jswrap_btoa(JsVar *binaryData) {
   if (!jsvIsIterable(binaryData)) {
-    jsExceptionHere(JSET_ERROR, "Expecting a string or array, got %t", binaryData);
+    jsExceptionHere(JSET_ERROR, "Expecting String or Array, got %t", binaryData);
     return 0;
   }
-  size_t inputLength = jsvGetLength(binaryData);
+  size_t inputLength = (size_t)jsvGetLength(binaryData);
   size_t outputLength = ((inputLength+2)/3)*4;
   JsVar* base64Data = jsvNewStringOfLength((unsigned int)outputLength, NULL);
   if (!base64Data) return 0;
@@ -344,30 +384,42 @@ Decode the supplied base64 string into a normal string
  */
 JsVar *jswrap_atob(JsVar *base64Data) {
   if (!jsvIsString(base64Data)) {
-    jsExceptionHere(JSET_ERROR, "Expecting a string, got %t", base64Data);
+    jsExceptionHere(JSET_ERROR, "Expecting String, got %t", base64Data);
     return 0;
   }
-  size_t inputLength = jsvGetStringLength(base64Data);
+  // work out input length (ignoring whitespace)
+  size_t inputLength = 0;
+  JsvStringIterator itsrc;
+  jsvStringIteratorNew(&itsrc, base64Data, 0);
+  char prevCh = 0, prevPrevCh = 0;
+  while (jsvStringIteratorHasChar(&itsrc)) {
+    char ch = jsvStringIteratorGetChar(&itsrc);
+    if (!isWhitespace(ch)) {
+      prevPrevCh = prevCh;
+      prevCh = ch;
+      inputLength++;
+    }
+    jsvStringIteratorNext(&itsrc);
+  }
+  jsvStringIteratorFree(&itsrc);
+  // work out output length and allocate buffer
   size_t outputLength = inputLength*3/4;
-  if (jsvGetCharInString(base64Data,inputLength-1)=='=') outputLength--;
-  if (jsvGetCharInString(base64Data,inputLength-2)=='=') outputLength--;
+  if (prevCh=='=') outputLength--;
+  if (prevPrevCh=='=') outputLength--;
   JsVar* binaryData = jsvNewStringOfLength((unsigned int)outputLength, NULL);
   if (!binaryData) return 0;
-  JsvStringIterator itsrc;
+  // decode...
   JsvStringIterator itdst;
   jsvStringIteratorNew(&itsrc, base64Data, 0);
   jsvStringIteratorNew(&itdst, binaryData, 0);
-  // skip whitespace
-  while (jsvStringIteratorHasChar(&itsrc) &&
-      isWhitespace(jsvStringIteratorGetChar(&itsrc)))
-    jsvStringIteratorNext(&itsrc);
-
   while (jsvStringIteratorHasChar(&itsrc) && !jspIsInterrupted()) {
     uint32_t triple = 0;
     int i, valid=0;
     for (i=0;i<4;i++) {
       if (jsvStringIteratorHasChar(&itsrc)) {
-        int sextet = jswrap_atob_decode(jsvStringIteratorGetCharAndNext(&itsrc));
+        char ch = ' '; // get char, skip whitespace. If string ends, ch=0 and we break out
+        while (ch && isWhitespace(ch)) ch=jsvStringIteratorGetCharAndNext(&itsrc);
+        int sextet = jswrap_atob_decode(ch);
         if (sextet>=0) {
           triple |= (unsigned int)(sextet) << ((3-i)*6);
           valid=i;
@@ -396,7 +448,8 @@ JsVar *jswrap_atob(JsVar *base64Data) {
   ],
   "return" : ["JsVar","A string containing the encoded data"]
 }
-Convert a string with any character not alphanumeric or `- _ . ! ~ * ' ( )` converted to the form `%XY` where `XY` is its hexadecimal representation
+Convert a string with any character not alphanumeric or `- _ . ! ~ * ' ( )`
+converted to the form `%XY` where `XY` is its hexadecimal representation
  */
 JsVar *jswrap_encodeURIComponent(JsVar *arg) {
   JsVar *v = jsvAsString(arg);
@@ -444,7 +497,8 @@ JsVar *jswrap_encodeURIComponent(JsVar *arg) {
   ],
   "return" : ["JsVar","A string containing the decoded data"]
 }
-Convert any groups of characters of the form '%ZZ', into characters with hex code '0xZZ'
+Convert any groups of characters of the form '%ZZ', into characters with hex
+code '0xZZ'
  */
 JsVar *jswrap_decodeURIComponent(JsVar *arg) {
   JsVar *v = jsvAsString(arg);
@@ -458,17 +512,17 @@ JsVar *jswrap_decodeURIComponent(JsVar *arg) {
     while (jsvStringIteratorHasChar(&it)) {
       char ch = jsvStringIteratorGetCharAndNext(&it);
       if (ch>>7) {
-        jsExceptionHere(JSET_ERROR, "ASCII only\n");
+        jsExceptionHere(JSET_ERROR, "ASCII only");
         break;
       }
       if (ch!='%') {
         jsvStringIteratorAppend(&dst, ch);
       } else {
-        int hi = jsvStringIteratorGetCharAndNext(&it);
-        int lo = jsvStringIteratorGetCharAndNext(&it);
+        char hi = (char)jsvStringIteratorGetCharAndNext(&it);
+        char lo = (char)jsvStringIteratorGetCharAndNext(&it);
         int v = (char)hexToByte(hi,lo);
         if (v<0) {
-          jsExceptionHere(JSET_ERROR, "Invalid URI\n");
+          jsExceptionHere(JSET_ERROR, "Invalid URI");
           break;
         }
         ch = (char)v;
@@ -481,3 +535,129 @@ JsVar *jswrap_decodeURIComponent(JsVar *arg) {
   jsvUnLock(v);
   return result;
 }
+
+/*JSON{
+  "type" : "function",
+  "name" : "trace",
+  "ifndef" : "SAVE_ON_FLASH",
+  "generate" : "jswrap_trace",
+  "params" : [
+    ["root","JsVar","The symbol to output (optional). If nothing is specified, everything will be output"]
+  ]
+}
+Output debugging information
+
+Note: This is not included on boards with low amounts of flash memory, or the
+Espruino board.
+ */
+void jswrap_trace(JsVar *root) {
+  #ifdef ESPRUINOBOARD
+  // leave this function out on espruino board - we need to save as much flash as possible
+  jsiConsolePrintf("Trace not included on this board");
+  #else
+  if (jsvIsUndefined(root)) {
+    jsvTrace(execInfo.root, 0);
+  } else {
+    jsvTrace(root, 0);
+  }
+  #endif
+}
+
+
+/*JSON{
+  "type" : "function",
+  "name" : "print",
+  "generate" : "jswrap_print",
+  "params" : [
+    ["text","JsVarArray",""]
+  ]
+}
+Print the supplied string(s) to the console
+
+ **Note:** If you're connected to a computer (not a wall adaptor) via USB but
+ **you are not running a terminal app** then when you print data Espruino may
+ pause execution and wait until the computer requests the data it is trying to
+ print.
+ */
+/*JSON{
+  "type" : "staticmethod",
+  "class" : "console",
+  "name" : "log",
+  "generate" : "jswrap_print",
+  "params" : [
+    ["text","JsVarArray","One or more arguments to print"]
+  ]
+}
+Print the supplied string(s) to the console
+
+ **Note:** If you're connected to a computer (not a wall adaptor) via USB but
+ **you are not running a terminal app** then when you print data Espruino may
+ pause execution and wait until the computer requests the data it is trying to
+ print.
+ */
+void jswrap_print(JsVar *v) {
+  assert(jsvIsArray(v));
+
+  jsiConsoleRemoveInputLine();
+  JsvObjectIterator it;
+  jsvObjectIteratorNew(&it, v);
+  while (jsvObjectIteratorHasValue(&it)) {
+    JsVar *v = jsvObjectIteratorGetValue(&it);
+    if (jsvIsString(v))
+      jsiConsolePrintStringVar(v);
+    else
+      jsfPrintJSON(v, JSON_PRETTY | JSON_SOME_NEWLINES | JSON_SHOW_OBJECT_NAMES);
+    jsvUnLock(v);
+    jsvObjectIteratorNext(&it);
+    if (jsvObjectIteratorHasValue(&it))
+      jsiConsolePrint(" ");
+  }
+  jsvObjectIteratorFree(&it);
+  jsiConsolePrint("\n");
+}
+
+
+/*JSON{
+  "type" : "staticmethod",
+  "class" : "console",
+  "name" : "debug",
+  "generate" : "jswrap_print",
+  "params" : [
+    ["text","JsVarArray","One or more arguments to print"]
+  ]
+}
+Implemented in Espruino as an alias of `console.log`
+ */
+/*JSON{
+  "type" : "staticmethod",
+  "class" : "console",
+  "name" : "info",
+  "generate" : "jswrap_print",
+  "params" : [
+    ["text","JsVarArray","One or more arguments to print"]
+  ]
+}
+Implemented in Espruino as an alias of `console.log`
+ */
+/*JSON{
+  "type" : "staticmethod",
+  "class" : "console",
+  "name" : "warn",
+  "generate" : "jswrap_print",
+  "params" : [
+    ["text","JsVarArray","One or more arguments to print"]
+  ]
+}
+Implemented in Espruino as an alias of `console.log`
+ */
+/*JSON{
+  "type" : "staticmethod",
+  "class" : "console",
+  "name" : "error",
+  "generate" : "jswrap_print",
+  "params" : [
+    ["text","JsVarArray","One or more arguments to print"]
+  ]
+}
+Implemented in Espruino as an alias of `console.log`
+ */

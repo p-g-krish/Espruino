@@ -36,7 +36,7 @@ typedef enum {
   // device type
   EV_NONE,
   EV_EXTI0,  ///< External Interrupt
-  EV_EXTI_MAX = EV_EXTI0 + EXTI_COUNT - 1,
+  EV_EXTI_MAX = EV_EXTI0 + ESPR_EXTI_COUNT - 1,
   EV_SERIAL_START,
   EV_LOOPBACKA = EV_SERIAL_START,
   EV_LOOPBACKB,
@@ -55,28 +55,31 @@ typedef enum {
 #ifdef BLUETOOTH
   EV_BLUETOOTH, ///< Bluetooth LE
 #endif
-#if USART_COUNT>=1
+#ifdef USE_SWDCON
+  EV_SWDCON, /// console over in memory buffer accessible via SWD
+#endif
+#if ESPR_USART_COUNT>=1
   EV_SERIAL1, // Used for IO for UARTS
 #endif
-#if USART_COUNT>=2
+#if ESPR_USART_COUNT>=2
   EV_SERIAL2,
 #endif
-#if USART_COUNT>=3
+#if ESPR_USART_COUNT>=3
   EV_SERIAL3,
 #endif
-#if USART_COUNT>=4
+#if ESPR_USART_COUNT>=4
   EV_SERIAL4,
 #endif
-#if USART_COUNT>=5
+#if ESPR_USART_COUNT>=5
   EV_SERIAL5,
 #endif
-#if USART_COUNT>=6
+#if ESPR_USART_COUNT>=6
   EV_SERIAL6,
 #endif
-#if USART_COUNT>=1
-  EV_SERIAL_MAX = EV_SERIAL1 + USART_COUNT - 1,
+#if ESPR_USART_COUNT>=1
+  EV_SERIAL_MAX = EV_SERIAL1 + ESPR_USART_COUNT - 1,
   EV_SERIAL1_STATUS, // Used to store serial status info
-  EV_SERIAL_STATUS_MAX = EV_SERIAL1_STATUS + USART_COUNT - 1,
+  EV_SERIAL_STATUS_MAX = EV_SERIAL1_STATUS + ESPR_USART_COUNT - 1,
 #else
   _EV_SERIAL_MAX_PLUS_ONE,
   EV_SERIAL_MAX = _EV_SERIAL_MAX_PLUS_ONE-1,
@@ -85,29 +88,33 @@ typedef enum {
   EV_BLUETOOTH_PENDING,      // Tasks that came from the Bluetooth Stack in an IRQ
   EV_BLUETOOTH_PENDING_DATA, // Data for pending tasks - this comes after the EV_BLUETOOTH_PENDING task itself
 #endif
-#if SPI_COUNT>=1
+  EV_CUSTOM, ///< Custom event (See IOCustomEventFlags)
+#ifdef BANGLEJS
+  EV_BANGLEJS,               // sent whenever Bangle.js-specific data needs to be queued
+#endif
+#if ESPR_SPI_COUNT>=1
   EV_SPI1, ///< SPI Devices
 #endif
-#if SPI_COUNT>=2
+#if ESPR_SPI_COUNT>=2
   EV_SPI2,
 #endif
-#if SPI_COUNT>=3
+#if ESPR_SPI_COUNT>=3
   EV_SPI3,
 #endif
-#if SPI_COUNT>=1
-  EV_SPI_MAX = EV_SPI1 + SPI_COUNT - 1,
+#if ESPR_SPI_COUNT>=1
+  EV_SPI_MAX = EV_SPI1 + ESPR_SPI_COUNT - 1,
 #endif
-#if I2C_COUNT>=1
+#if ESPR_I2C_COUNT>=1
   EV_I2C1, ///< I2C Devices
 #endif
-#if I2C_COUNT>=2
+#if ESPR_I2C_COUNT>=2
   EV_I2C2,
 #endif
-#if I2C_COUNT>=3
+#if ESPR_I2C_COUNT>=3
   EV_I2C3,
 #endif
-#if I2C_COUNT>=1
-  EV_I2C_MAX = EV_I2C1 + I2C_COUNT - 1,
+#if ESPR_I2C_COUNT>=1
+  EV_I2C_MAX = EV_I2C1 + ESPR_I2C_COUNT - 1,
 #endif
   EV_DEVICE_MAX,
   // EV_DEVICE_MAX should not be >64 - see DEVICE_INITIALISED_FLAGS
@@ -121,11 +128,20 @@ typedef enum {
   EV_SERIAL_STATUS_PARITY_ERR = EV_SERIAL_STATUS_FRAMING_ERR<<1,
   // ----------------------------------------- WATCH EVENTS
   EV_EXTI_IS_HIGH = EV_TYPE_MASK+1,           //< if the pin we're watching is high, the handler sets this
-  EV_EXTI_DATA_PIN_HIGH = EV_EXTI_IS_HIGH<<1  //< If a data pin was specified, its value is high
-} PACKED_FLAGS IOEventFlags;
+  EV_EXTI_DATA_PIN_HIGH = EV_EXTI_IS_HIGH<<1  //< If a data pin was specified, its value is high. OR on Bangle.js it causes us not to call user code
+} PACKED_FLAGS IOEventFlags; // should be one byte
 
 #define DEVICE_SANITY_CHECK() if (EV_TYPE_MASK>63) jsError("DEVICE_SANITY_CHECK failed")
 
+/** Event types for EV_CUSTOM */
+typedef enum {
+  EVC_NONE,
+#ifdef NRF52_SERIES
+  EVC_LPCOMP, // jswrap_espruino: E.setComparator / E.on("comparator" event
+#endif
+  EVC_TYPE_MASK = 255,
+  EVC_DATA_LPCOMP_UP = 256
+} PACKED_FLAGS IOCustomEventFlags;
 
 /// True is the device is a serial device (could be a USART, Bluetooth, USB, etc)
 #define DEVICE_IS_SERIAL(X) (((X)>=EV_SERIAL_START) && ((X)<=EV_SERIAL_MAX))
@@ -134,7 +150,7 @@ typedef enum {
 /// If DEVICE_HAS_DEVICE_STATE, this is the index where device state is stored
 #define TO_SERIAL_DEVICE_STATE(X) ((X)-EV_SERIAL_DEVICE_STATE_START)
 
-#if USART_COUNT>=1
+#if ESPR_USART_COUNT>=1
 /// Return true if the device is a USART (hardware serial)
 #define DEVICE_IS_USART(X) (((X)>=EV_SERIAL1) && ((X)<=EV_SERIAL_MAX))
 #define DEVICE_IS_USART_STATUS(X) (((X)>=EV_SERIAL1_STATUS) && ((X)<=EV_SERIAL_STATUS_MAX))
@@ -144,19 +160,19 @@ typedef enum {
 #endif
 
 // Return true if the device is an SPI.
-#if SPI_COUNT>=1
+#if ESPR_SPI_COUNT>=1
 #define DEVICE_IS_SPI(X) (((X)>=EV_SPI1) && ((X)<=EV_SPI_MAX))
 #else
 #define DEVICE_IS_SPI(X) (false)
 #endif
-#if I2C_COUNT>=1
+#if ESPR_I2C_COUNT>=1
 #define DEVICE_IS_I2C(X) (((X)>=EV_I2C1) && ((X)<=EV_I2C_MAX))
 #else
 #define DEVICE_IS_I2C(X) (false)
 #endif
 #define DEVICE_IS_EXTI(X) (((X)>=EV_EXTI0) && ((X)<=EV_EXTI_MAX))
 
-#if USART_COUNT>=1
+#if ESPR_USART_COUNT>=1
 #define IOEVENTFLAGS_SERIAL_TO_SERIAL_STATUS(X) ((X) + EV_SERIAL1_STATUS - EV_SERIAL1)
 #define IOEVENTFLAGS_SERIAL_STATUS_TO_SERIAL(X) ((X) + EV_SERIAL1 - EV_SERIAL1_STATUS)
 #endif
@@ -182,9 +198,10 @@ typedef struct IOEvent {
 
 /// Push an IO event into the ioBuffer (designed to be called from IRQ)
 void jshPushEvent(IOEvent *evt);
-// Push an 'IO' even
+/// Add this IO event to the IO event queue. Calls jshHadEvent();
 void jshPushIOEvent(IOEventFlags channel, JsSysTime time);
-void jshPushIOWatchEvent(IOEventFlags channel); // push an even when a pin changes state
+/// Signal an IO watch event as having happened. Calls jshHadEvent();
+void jshPushIOWatchEvent(IOEventFlags channel);
 /// Push a single character event (for example USART RX)
 void jshPushIOCharEvent(IOEventFlags channel, char charData);
 /// Push many character events at once (for example USB RX)
@@ -202,6 +219,8 @@ int jshGetEventsUsed();
 
 /// Do we have enough space for N characters?
 bool jshHasEventSpaceForChars(int n);
+/// How many characters can we write?
+int jshGetIOCharEventsFree();
 
 const char *jshGetDeviceString(IOEventFlags device);
 IOEventFlags jshFromDeviceString(const char *device);
@@ -217,6 +236,8 @@ void jshTransmit(IOEventFlags device, unsigned char data);
 void jshTransmitPrintf(IOEventFlags device, const char *fmt, ...);
 /// Wait for transmit to finish
 void jshTransmitFlush();
+/// Wait for all data in the transmit queue to be written for a specific device - this can hang if the device isn't being emptied!
+void jshTransmitFlushDevice(IOEventFlags device);
 /// Clear everything from a device
 void jshTransmitClearDevice(IOEventFlags device);
 /// Move all output from one device to another
@@ -254,6 +275,6 @@ Pin jshGetEventDataPin(IOEventFlags channel);
 void jshSetErrorHandlingEnabled(IOEventFlags device, bool errorHandling);
 
 /// Get whether a Serial device puts framing/parity errors into the input queue
-bool jshGetErrorHandlingEnabled(IOEventFlags device); 
+bool jshGetErrorHandlingEnabled(IOEventFlags device);
 
 #endif /* JSDEVICES_H_ */

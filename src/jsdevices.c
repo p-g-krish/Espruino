@@ -73,8 +73,14 @@ Pin jshSerialDeviceCTSPins[JSHSERIALDEVICESTATUSES];
 
 // ----------------------------------------------------------------------------
 //                                                              IO EVENT BUFFER
+#if IOBUFFERMASK<256
+typedef uint8_t IOBufferIdx;
+#else
+typedef uint16_t IOBufferIdx;
+#endif
+
 volatile IOEvent ioBuffer[IOBUFFERMASK+1];
-volatile unsigned char ioHead=0, ioTail=0;
+volatile IOBufferIdx ioHead=0, ioTail=0;
 
 // ----------------------------------------------------------------------------
 
@@ -87,7 +93,11 @@ void jshInitDevices() {
   // we don't reset it for every call to reset()
 #ifdef USB
   assert(EV_USBSERIAL>=EV_SERIAL_DEVICE_STATE_START);
-  jshSerialDeviceStates[TO_SERIAL_DEVICE_STATE(EV_USBSERIAL)] = SDS_FLOW_CONTROL_XON_XOFF;
+  jshSerialDeviceStates[TO_SERIAL_DEVICE_STATE(EV_USBSERIAL)] = SDS_NONE; // USB serial should have its own flow control
+#endif
+#ifdef USE_SWDCON
+  assert(EV_SWDCON>=EV_SERIAL_DEVICE_STATE_START);
+  jshSerialDeviceStates[TO_SERIAL_DEVICE_STATE(EV_SWDCON)] = SDS_FLOW_CONTROL_XON_XOFF;
 #endif
 #ifdef BLUETOOTH
   jshSerialDeviceStates[TO_SERIAL_DEVICE_STATE(EV_BLUETOOTH)] = SDS_FLOW_CONTROL_XON_XOFF;
@@ -99,22 +109,26 @@ void jshInitDevices() {
 /** Reset any devices that could have been set up differently by JS code.
  * Called from jshReset */
 void jshResetDevices() {
-  unsigned int i;
   // Reset list of pins that were set manually
   jshResetPinStateIsManual();
+
   // setup flow control
-  for (i=0;i<JSHSERIALDEVICESTATUSES;i++) {
+  for (int i=0;i<JSHSERIALDEVICESTATUSES;i++) {
 #ifdef USB
     if (i==TO_SERIAL_DEVICE_STATE(EV_USBSERIAL)) break; // don't update USB status
+#endif
+#ifdef USE_SWDCON
+    if (i==TO_SERIAL_DEVICE_STATE(EV_SWDCON)) break; // don't update SWDCON status
 #endif
 #ifdef BLUETOOTH
     if (i==TO_SERIAL_DEVICE_STATE(EV_BLUETOOTH)) break; // don't update Bluetooth status
 #endif
+    if (i==TO_SERIAL_DEVICE_STATE(jsiGetConsoleDevice())) break; // if we're on a console device now, don't mess with flow/CTS for it
     jshSerialDeviceStates[i] = SDS_NONE;
     jshSerialDeviceCTSPins[i] = PIN_UNDEFINED;
   }
   // reset callbacks for events
-  for (i=EV_EXTI0;i<=EV_EXTI_MAX;i++)
+  for (int i=EV_EXTI0;i<=EV_EXTI_MAX;i++)
     jshEventCallbacks[i-EV_EXTI0] = 0;
   // Reset pin state for button
 #ifdef BTN1_PININDEX
@@ -180,6 +194,8 @@ void jshTransmit(
     jshPushIOCharEvent(device==EV_LOOPBACKB ? EV_LOOPBACKA : EV_LOOPBACKB, (char)data);
     return;
   }
+  //if (device==EV_USBSERIAL)
+  //  jshTransmitPrintf(DEFAULT_CONSOLE_DEVICE, "=> %d\n", data);
 #ifdef USE_TELNET
   if (device == EV_TELNET) {
     // gross hack to avoid deadlocking on the network here
@@ -225,6 +241,9 @@ void jshTransmit(
   if (txHeadNext==txTail) {
     jsiSetBusy(BUSY_TRANSMIT, true);
     bool wasConsoleLimbo = device==EV_LIMBO && jsiGetConsoleDevice()==EV_LIMBO;
+#ifdef USE_SWDCON
+    int loopCount=0; // for recovery inside swdconBusyIdle
+#endif
     while (txHeadNext==txTail) {
       // wait for send to finish as buffer is about to overflow
       if (jshIsInInterrupt()) {
@@ -233,6 +252,11 @@ void jshTransmit(
         return;
       }
       jshBusyIdle();
+#ifdef USE_SWDCON
+      loopCount++;
+      extern bool swdconBusyIdle(int);
+      if (device == EV_SWDCON) swdconBusyIdle(loopCount);
+#endif
 #ifdef USB
       // just in case USB was unplugged while we were waiting!
       if (!jshIsUSBSERIALConnected()) jshTransmitClearDevice(EV_USBSERIAL);
@@ -276,14 +300,12 @@ IOEventFlags jshGetDeviceToTransmit() {
 }
 
 /**
- * Try and get a character for transmission.
+ * Try and get a character for transmission on a device.
  * \return The next byte to transmit or -1 if there is none.
  */
-int jshGetCharToTransmit(
-    IOEventFlags device // The device being looked at for a transmission.
-  ) {
+int jshGetCharToTransmit(IOEventFlags device) {
   if (DEVICE_HAS_DEVICE_STATE(device)) {
-    JshSerialDeviceState *deviceState = &jshSerialDeviceStates[TO_SERIAL_DEVICE_STATE(device)];
+    volatile JshSerialDeviceState *deviceState = &jshSerialDeviceStates[TO_SERIAL_DEVICE_STATE(device)];
     if ((*deviceState)&SDS_XOFF_PENDING) {
       (*deviceState) = ((*deviceState)&(~SDS_XOFF_PENDING)) | SDS_XOFF_SENT;
       return 19/*XOFF*/;
@@ -316,9 +338,29 @@ int jshGetCharToTransmit(
   return -1; // no data :(
 }
 
+/// Wait for all data in the transmit queue to be written
 void jshTransmitFlush() {
   jsiSetBusy(BUSY_TRANSMIT, true);
   while (jshHasTransmitData()) ; // wait for send to finish
+  jsiSetBusy(BUSY_TRANSMIT, false);
+}
+
+/// Wait for all data in the transmit queue to be written for a specific device - this can hang if the device isn't being emptied!
+void jshTransmitFlushDevice(IOEventFlags device) {
+  jsiSetBusy(BUSY_TRANSMIT, true);
+  bool deviceHasData = false;
+  do {
+    deviceHasData = false;
+    // Check TX queue to see if there is any data to send
+    unsigned char tempTail = txTail;
+    while (txHead != tempTail) {
+      if (IOEVENTFLAGS_GETTYPE(txBuffer[tempTail].flags) == device) {
+        deviceHasData = true;
+        break;
+      }
+      tempTail = (unsigned char)((tempTail+1)&TXBUFFERMASK);
+    }
+  } while (deviceHasData);
   jsiSetBusy(BUSY_TRANSMIT, false);
 }
 
@@ -380,7 +422,7 @@ void CALLED_FROM_INTERRUPT jshPushEvent(IOEvent *evt) {
    * USB and USART data to be coming in at the same time, and it can trip
    * things up if one IRQ interrupts another. */
   jshInterruptOff();
-  unsigned char nextHead = (unsigned char)((ioHead+1) & IOBUFFERMASK);
+  IOBufferIdx nextHead = (IOBufferIdx)((ioHead+1) & IOBUFFERMASK);
   if (ioTail == nextHead) {
     jshInterruptOn();
     jshIOEventOverflowed();
@@ -393,7 +435,7 @@ void CALLED_FROM_INTERRUPT jshPushEvent(IOEvent *evt) {
 
 /// Attempt to push characters onto an existing event
 static bool jshPushIOCharEventAppend(IOEventFlags channel, char charData) {
-  unsigned char lastHead = (unsigned char)((ioHead+IOBUFFERMASK) & IOBUFFERMASK); // one behind head
+  IOBufferIdx lastHead = (IOBufferIdx)((ioHead+IOBUFFERMASK) & IOBUFFERMASK); // one behind head
   if (ioHead!=ioTail && lastHead!=ioTail) {
     // we can do this because we only read in main loop, and we're in an interrupt here
     if (IOEVENTFLAGS_GETTYPE(ioBuffer[lastHead].flags) == channel) {
@@ -414,7 +456,6 @@ static bool jshPushIOCharEventHandler(IOEventFlags channel, char charData) {
   // Check for a CTRL+C
   if (charData==3 && channel==jsiGetConsoleDevice()) {
     jsiCtrlC(); // Ctrl-C - force interrupt of execution
-    return true;
   }
   return jswOnCharEvent(channel, charData);
 }
@@ -451,7 +492,7 @@ void jshPushIOCharEvents(IOEventFlags channel, char *data, unsigned int count) {
   for (i=0;i<count;i++) jshPushIOCharEvent(channel, data[i]);
 }
 
-/* Signal an IO watch event as having happened.
+/* Signal an IO watch event as having happened. Calls jshHadEvent();
 On the esp8266 we need this to be loaded into static RAM because it can run at interrupt time */
 void CALLED_FROM_INTERRUPT jshPushIOWatchEvent(
     IOEventFlags channel //!< The channel on which the IO watch event has happened.
@@ -488,7 +529,7 @@ void CALLED_FROM_INTERRUPT jshPushIOWatchEvent(
   jshPushIOEvent(channel, time);
 }
 
-/// Add this IO event to the IO event queue.
+/// Add this IO event to the IO event queue. Calls jshHadEvent();
 void CALLED_FROM_INTERRUPT jshPushIOEvent(
     IOEventFlags channel, //!< The event to add to the queue.
     JsSysTime time        //!< The time that the event is thought to have happened.
@@ -497,13 +538,14 @@ void CALLED_FROM_INTERRUPT jshPushIOEvent(
   evt.flags = channel;
   evt.data.time = (unsigned int)time;
   jshPushEvent(&evt);
+  jshHadEvent();
 }
 
 // returns true on success
 bool jshPopIOEvent(IOEvent *result) {
   if (ioHead==ioTail) return false;
   *result = ioBuffer[ioTail];
-  ioTail = (unsigned char)((ioTail+1) & IOBUFFERMASK);
+  ioTail = (IOBufferIdx)((ioTail+1) & IOBUFFERMASK);
   return true;
 }
 
@@ -513,7 +555,7 @@ bool jshPopIOEventOfType(IOEventFlags eventType, IOEvent *result) {
   if (IOEVENTFLAGS_GETTYPE(ioBuffer[ioTail].flags) == eventType)
     return jshPopIOEvent(result);
   // Now check non-top
-  unsigned char i = ioTail;
+  IOBufferIdx i = ioTail;
   while (ioHead!=i) {
     if (IOEVENTFLAGS_GETTYPE(ioBuffer[i].flags) == eventType) {
       /* We need IRQ off for this, because if we get data it's possible
@@ -522,18 +564,18 @@ bool jshPopIOEventOfType(IOEventFlags eventType, IOEvent *result) {
       jshInterruptOff();
       *result = ioBuffer[i];
       // work back and shift all items in out queue
-      unsigned char n = (unsigned char)((i+IOBUFFERMASK) & IOBUFFERMASK);
+      IOBufferIdx n = (IOBufferIdx)((i+IOBUFFERMASK) & IOBUFFERMASK);
       while (n!=ioTail) {
         ioBuffer[i] = ioBuffer[n];
         i = n;
-        n = (unsigned char)((n+IOBUFFERMASK) & IOBUFFERMASK);
+        n = (IOBufferIdx)((n+IOBUFFERMASK) & IOBUFFERMASK);
       }
       // finally update the tail pointer, and return
-      ioTail = (unsigned char)((ioTail+1) & IOBUFFERMASK);
+      ioTail = (IOBufferIdx)((ioTail+1) & IOBUFFERMASK);
       jshInterruptOn();
       return true;
     }
-    i = (unsigned char)((i+1) & IOBUFFERMASK);
+    i = (IOBufferIdx)((i+1) & IOBUFFERMASK);
   }
   return false;
 }
@@ -557,11 +599,13 @@ int jshGetEventsUsed() {
   return spaceUsed;
 }
 
+int jshGetIOCharEventsFree() {
+  int spaceLeft = IOBUFFERMASK+1-jshGetEventsUsed();
+  return spaceLeft*IOEVENT_MAXCHARS-4; // be sensible - leave a little spare
+}
+
 bool jshHasEventSpaceForChars(int n) {
-  int spacesNeeded = 4 + (n/IOEVENT_MAXCHARS); // be sensible - leave a little spare
-  int spaceUsed = jshGetEventsUsed();
-  int spaceLeft = IOBUFFERMASK+1-spaceUsed;
-  return spaceLeft > spacesNeeded;
+  return jshGetIOCharEventsFree() > n;
 }
 
 // ----------------------------------------------------------------------------
@@ -588,43 +632,46 @@ const char *jshGetDeviceString(
 #ifdef USE_TELNET
   case EV_TELNET: return "Telnet";
 #endif
+#ifdef USE_SWDCON
+  case EV_SWDCON: return "SWDCON";
+#endif
 #ifdef USE_TERMINAL
   case EV_TERMINAL: return "Terminal";
 #endif
-#if USART_COUNT>=1
+#if ESPR_USART_COUNT>=1
   case EV_SERIAL1: return "Serial1";
 #endif
-#if USART_COUNT>=2
+#if ESPR_USART_COUNT>=2
   case EV_SERIAL2: return "Serial2";
 #endif
-#if USART_COUNT>=3
+#if ESPR_USART_COUNT>=3
   case EV_SERIAL3: return "Serial3";
 #endif
-#if USART_COUNT>=4
+#if ESPR_USART_COUNT>=4
   case EV_SERIAL4: return "Serial4";
 #endif
-#if USART_COUNT>=5
+#if ESPR_USART_COUNT>=5
   case EV_SERIAL5: return "Serial5";
 #endif
-#if USART_COUNT>=6
+#if ESPR_USART_COUNT>=6
   case EV_SERIAL6: return "Serial6";
 #endif
-#if SPI_COUNT>=1
+#if ESPR_SPI_COUNT>=1
   case EV_SPI1: return "SPI1";
 #endif
-#if SPI_COUNT>=2
+#if ESPR_SPI_COUNT>=2
   case EV_SPI2: return "SPI2";
 #endif
-#if SPI_COUNT>=3
+#if ESPR_SPI_COUNT>=3
   case EV_SPI3: return "SPI3";
 #endif
-#if I2C_COUNT>=1
+#if ESPR_I2C_COUNT>=1
   case EV_I2C1: return "I2C1";
 #endif
-#if I2C_COUNT>=2
+#if ESPR_I2C_COUNT>=2
   case EV_I2C2: return "I2C2";
 #endif
-#if I2C_COUNT>=3
+#if ESPR_I2C_COUNT>=3
   case EV_I2C3: return "I2C3";
 #endif
   default: return "";
@@ -661,22 +708,25 @@ IOEventFlags jshFromDeviceString(
 #endif
   }
   else if (device[0]=='S') {
-#if USART_COUNT>0
+#ifdef USE_SWDCON
+     if (strcmp(&device[1], "WDCON")==0) return EV_SWDCON;
+#endif
+#if ESPR_USART_COUNT>0
   if (device[1]=='e' && device[2]=='r' && device[3]=='i' && device[4]=='a' && device[5]=='l' &&
-      device[6]>='1' && (device[6]-'1')<USART_COUNT &&
+      device[6]>='1' && (device[6]-'1')<ESPR_USART_COUNT &&
       device[7]==0)
     return EV_SERIAL1+device[6]-'1';
 #endif
-#if SPI_COUNT>0
+#if ESPR_SPI_COUNT>0
   if (device[1]=='P' && device[2]=='I' &&
-      device[3]>='1' && (device[3]-'1')<SPI_COUNT &&
+      device[3]>='1' && (device[3]-'1')<ESPR_SPI_COUNT &&
       device[4]==0)
     return EV_SPI1+device[3]-'1';
 #endif
   }
-#if I2C_COUNT>0
+#if ESPR_I2C_COUNT>0
   else if (device[0]=='I' && device[1]=='2' && device[2]=='C' &&
-           device[3]>='1' && (device[3]-'1')<I2C_COUNT &&
+           device[3]>='1' && (device[3]-'1')<ESPR_I2C_COUNT &&
            device[4]==0)
     return EV_I2C1+device[3]-'1';
 #endif
@@ -689,7 +739,7 @@ void jshSetFlowControlXON(IOEventFlags device, bool hostShouldTransmit) {
     if (!hostShouldTransmit)
       jshSerialFlowControlWasSet = true;
     int devIdx = TO_SERIAL_DEVICE_STATE(device);
-    JshSerialDeviceState *deviceState = &jshSerialDeviceStates[devIdx];
+    volatile JshSerialDeviceState *deviceState = &jshSerialDeviceStates[devIdx];
     if ((*deviceState) & SDS_FLOW_CONTROL_XON_XOFF) {
       if (hostShouldTransmit) {
         if (((*deviceState)&(SDS_XOFF_SENT|SDS_XON_PENDING)) == SDS_XOFF_SENT) {
@@ -726,19 +776,19 @@ void jshSetFlowControlAllReady() {
 JsVar *jshGetDeviceObject(IOEventFlags device) {
   const char *deviceStr = jshGetDeviceString(device);
   if (!deviceStr) return 0;
-  return jsvObjectGetChild(execInfo.root, deviceStr, 0);
+  return jsvObjectGetChildIfExists(execInfo.root, deviceStr);
 }
 
 /// Set whether to use flow control on the given device or not. CTS is low when ready, high when not.
 void jshSetFlowControlEnabled(IOEventFlags device, bool software, Pin pinCTS) {
   if (DEVICE_HAS_DEVICE_STATE(device)) {
     int devIdx = TO_SERIAL_DEVICE_STATE(device);
-    JshSerialDeviceState *deviceState = &jshSerialDeviceStates[devIdx];
+    volatile JshSerialDeviceState *deviceState = &jshSerialDeviceStates[devIdx];
     if (software)
       (*deviceState) |= SDS_FLOW_CONTROL_XON_XOFF;
     else
       (*deviceState) &= ~SDS_FLOW_CONTROL_XON_XOFF;
-  
+
     jshSerialDeviceCTSPins[devIdx] = PIN_UNDEFINED;
     if (jshIsPinValid(pinCTS)) {
       jshPinSetState(pinCTS, JSHPINSTATE_GPIO_OUT);
@@ -772,7 +822,7 @@ Pin jshGetEventDataPin(IOEventFlags channel) {
 void jshSetErrorHandlingEnabled(IOEventFlags device, bool errorHandling) {
   if (DEVICE_HAS_DEVICE_STATE(device)) {
     int devIdx = TO_SERIAL_DEVICE_STATE(device);
-    JshSerialDeviceState *deviceState = &jshSerialDeviceStates[devIdx];
+    volatile JshSerialDeviceState *deviceState = &jshSerialDeviceStates[devIdx];
     if (errorHandling)
       (*deviceState) |= SDS_ERROR_HANDLING;
     else
@@ -783,7 +833,7 @@ void jshSetErrorHandlingEnabled(IOEventFlags device, bool errorHandling) {
 bool jshGetErrorHandlingEnabled(IOEventFlags device) {
   if (DEVICE_HAS_DEVICE_STATE(device)) {
     int devIdx = TO_SERIAL_DEVICE_STATE(device);
-    JshSerialDeviceState *deviceState = &jshSerialDeviceStates[devIdx];
+    volatile JshSerialDeviceState *deviceState = &jshSerialDeviceStates[devIdx];
     return (SDS_ERROR_HANDLING & *deviceState)!=0;
   } else
     return false;

@@ -45,7 +45,7 @@ typedef struct {
 #endif
 
 /// Read data while sending 0
-__attribute__( ( long_call, section(".data") ) ) static void spiFlashRead(unsigned char *rx, unsigned int len) {
+static void spiFlashRead(unsigned char *rx, unsigned int len) {
   NRF_GPIO_PIN_CLEAR_FAST((uint32_t)pinInfo[SPIFLASH_PIN_MOSI].pin);
   for (unsigned int i=0;i<len;i++) {
     int result = 0;
@@ -58,7 +58,7 @@ __attribute__( ( long_call, section(".data") ) ) static void spiFlashRead(unsign
   }
 }
 
-__attribute__( ( long_call, section(".data") ) ) static void spiFlashWrite(unsigned char *tx, unsigned int len) {
+static void spiFlashWrite(unsigned char *tx, unsigned int len) {
   for (unsigned int i=0;i<len;i++) {
     int data = tx[i];
     for (int bit=7;bit>=0;bit--) {
@@ -69,13 +69,13 @@ __attribute__( ( long_call, section(".data") ) ) static void spiFlashWrite(unsig
   }
 }
 
-__attribute__( ( long_call, section(".data") ) ) static void spiFlashWriteCS(unsigned char *tx, unsigned int len) {
+static void spiFlashWriteCS(unsigned char *tx, unsigned int len) {
   NRF_GPIO_PIN_CLEAR_FAST((uint32_t)pinInfo[SPIFLASH_PIN_CS].pin);
   spiFlashWrite(tx,len);
   NRF_GPIO_PIN_SET_FAST((uint32_t)pinInfo[SPIFLASH_PIN_CS].pin);
 }
 
-__attribute__( ( long_call, section(".data") ) ) static unsigned char spiFlashStatus() {
+static unsigned char spiFlashStatus() {
   unsigned char buf = 5;
   NRF_GPIO_PIN_CLEAR_FAST((uint32_t)pinInfo[SPIFLASH_PIN_CS].pin);
   spiFlashWrite(&buf, 1);
@@ -92,7 +92,6 @@ static void flashReset(){
   spiFlashWriteCS(buf,1);
   nrf_delay_us(50);
 }
-
 
 // Wake up the SPI Flash from deep power-down mode
 static void flashWakeUp() {
@@ -122,7 +121,7 @@ void spiFlashInit() {
   flashWakeUp();
   flashWakeUp();
   flashWakeUp();
-#endif  
+#endif
   // disable block protect 0/1/2
   unsigned char buf[2];
   int tries = 3;
@@ -146,7 +145,7 @@ void spiFlashInit() {
   jshDelayMicroseconds(100000);
 }
 
-__attribute__( ( long_call, section(".data") ) ) void spiFlashReadAddr(unsigned char *buf, uint32_t addr, uint32_t len) {
+void spiFlashReadAddr(unsigned char *buf, uint32_t addr, uint32_t len) {
   unsigned char b[4];
   // Read
   b[0] = 0x03;
@@ -159,7 +158,7 @@ __attribute__( ( long_call, section(".data") ) ) void spiFlashReadAddr(unsigned 
   NRF_GPIO_PIN_SET_FAST((uint32_t)pinInfo[SPIFLASH_PIN_CS].pin);
 }
 
-__attribute__( ( long_call, section(".data") ) ) void intFlashErase(uint32_t addr) {
+void intFlashErase(uint32_t addr) {
   NRF_NVMC->CONFIG = 2;
   while(!NRF_NVMC->READY);
   NRF_NVMC->ERASEPAGE = addr;
@@ -168,7 +167,7 @@ __attribute__( ( long_call, section(".data") ) ) void intFlashErase(uint32_t add
   while(!NRF_NVMC->READY);
 }
 
-__attribute__( ( long_call, section(".data") ) ) void intFlashWrite(uint32_t addr, unsigned char *data, uint32_t len) {
+void intFlashWrite(uint32_t addr, unsigned char *data, uint32_t len) {
   while (len) {
     NRF_NVMC->CONFIG = 1;
     while(!NRF_NVMC->READY);
@@ -213,7 +212,7 @@ bool flashEqual(FlashHeader header, uint32_t addr) {
 
 #if defined(LCD_CONTROLLER_GC9A01)
 // LCD output for generic SPI LCDs
-__attribute__( ( long_call, section(".data") ) ) void xlcd_wr(int data) {
+void xlcd_wr(int data) {
   for (int bit=7;bit>=0;bit--) {
     NRF_GPIO_PIN_WRITE_FAST(LCD_SPI_SCK, 0 );
     NRF_GPIO_PIN_WRITE_FAST(LCD_SPI_MOSI, ((data>>bit)&1) );
@@ -222,7 +221,7 @@ __attribute__( ( long_call, section(".data") ) ) void xlcd_wr(int data) {
 }
 #endif
 
-__attribute__( ( long_call, section(".data") ) ) void xlcd_rect(int x1,int y1, int x2, int y2, bool white) {
+void xlcd_rect(int x1,int y1, int x2, int y2, bool white) {
 #if defined(LCD_CONTROLLER_GC9A01)
   NRF_GPIO_PIN_WRITE_FAST(LCD_SPI_DC, 0); // command
   NRF_GPIO_PIN_WRITE_FAST(LCD_SPI_CS, 0);
@@ -259,54 +258,60 @@ __attribute__( ( long_call, section(".data") ) ) void xlcd_rect(int x1,int y1, i
 #endif
 }
 
-__attribute__( ( long_call, section(".data") ) ) void flashDoUpdate(FlashHeader header, uint32_t headerAddr) {
+void flashDoUpdate(FlashHeader header, uint32_t headerAddr) {
   unsigned char buf[256];
   int size, addr;
 
   __disable_irq(); // No IRQs - if we're updating bootloader it could really screw us up!
 
-  int percent = 0;
-  // Erase
-  size = header.size;
-  addr = header.address;
-  while (size>0) {
-    intFlashErase(addr);
-    addr += 4096;
-    size -= 4096;
-    percent = (addr-header.address)*120/header.size;
-    if (percent>120) percent=120;
-    xlcd_rect(60,182,60+percent,188,true);
+  while (true) {
+    int percent = 0;
+    // Erase
+    size = header.size;
+    addr = header.address;
+    while (size>0) {
+      intFlashErase(addr);
+      addr += 4096;
+      size -= 4096;
+      percent = (addr-header.address)*120/header.size;
+      if (percent>120) percent=120;
+      xlcd_rect(60,182,60+percent,188,true);
+      NRF_WDT->RR[0] = 0x6E524635; // kick watchdog
+    }
+    // Write
+    size = header.size;
+    int inaddr = headerAddr + sizeof(FlashHeader);
+    int outaddr = header.address;
+    while (size>0) {
+      unsigned int l = size;
+      if (l>sizeof(buf)) l=sizeof(buf);
+      spiFlashReadAddr(buf, inaddr, l);
+      intFlashWrite(outaddr, buf, l);
+      inaddr += l;
+      outaddr += l;
+      size -= l;
+      percent = (outaddr-header.address)*120/header.size;
+      if (percent>120) percent=120;
+      xlcd_rect(60,192,60+percent,198,true);
+      NRF_WDT->RR[0] = 0x6E524635; // kick watchdog
+    }
+    // clear progress bar
+    xlcd_rect(60,180,180,200,false);
+    // re-read all data to try and clear any caches (CRC does this anyway!)
+    lcd_println("CRC CHECK");
+    uint32_t crc = 0;
+    crc = crc32_compute(header.address, header.size, &crc);
     NRF_WDT->RR[0] = 0x6E524635; // kick watchdog
+    if (crc != header.CRC) {
+      // if CRC failed, redo!
+      lcd_println("CRC FAIL! RETRY");
+    } else {
+      // otherwise we're done!
+      lcd_println("CRC OK");
+      while (true) NVIC_SystemReset(); // reset
+    }
   }
-  // Write
-  size = header.size;
-  int inaddr = headerAddr + sizeof(FlashHeader);
-  int outaddr = header.address;
-  while (size>0) {
-    unsigned int l = size;
-    if (l>sizeof(buf)) l=sizeof(buf);
-    spiFlashReadAddr(buf, inaddr, l);
-    intFlashWrite(outaddr, buf, l);
-    inaddr += l;
-    outaddr += l;
-    size -= l;
-    percent = (outaddr-header.address)*120/header.size;
-    if (percent>120) percent=120;
-    xlcd_rect(60,192,60+percent,198,true);
-    NRF_WDT->RR[0] = 0x6E524635; // kick watchdog
-  }
-  // clear progress bar
-  xlcd_rect(60,180,180,200,false);
-  // re-read all data just to try and clear any caches
-  size = header.size;
-  outaddr = header.address;
-  volatile int v;
-  while (size--) {
-    v = *(char*)outaddr;
-    outaddr++;
-  }
-  // done!
-  while (true) NVIC_SystemReset(); // reset!
+
 }
 
 /// Return the size in bytes of a file based on the header
@@ -369,7 +374,9 @@ void flashCheckFile(uint32_t fileAddr) {
   lcd_print_hex(header.size); lcd_println(" SIZE");
   lcd_print_hex(header.CRC); lcd_println(" CRC");
   lcd_print_hex(header.version); lcd_println(" VERSION");
-  if (header.address==0xf7000) return; // NO BOOTLOADER - FOR TESTING
+  /* NO BOOTLOADER UPDATES ALLOWED as we'd be overwriting ourself.
+  It would brick the device */
+  if (header.address>=0xf7000 || ((header.address+header.size)>0xf7000)) return;
   // Calculate CRC
   lcd_println("CRC TEST...");
   unsigned char buf[256];
@@ -469,7 +476,7 @@ void flashCheckAndRun() {
 
 // Put the SPI Flash into deep power-down mode
 void flashPowerDown() {
-  spiFlashInit(); // 
+  spiFlashInit(); //
   unsigned char buf = 0xB9;  // SPI Flash deep power-down
   spiFlashWriteCS(&buf,1);
   nrf_delay_us(2); // Wait at least 1us for Flash IC to enter deep power-down

@@ -45,7 +45,8 @@ bool jsiFreeMoreMemory();
 bool jsiHasTimers(); // are there timers still left to run?
 bool jsiIsWatchingPin(Pin pin); // are there any watches for the given pin?
 
-void jsiCtrlC(); // Ctrl-C - force interrupt of execution
+/// Ctrl-C - force interrupt of execution
+void jsiCtrlC();
 
 /// Queue a function, string, or array (of funcs/strings) to be executed next time around the idle loop
 void jsiQueueEvents(JsVar *object, JsVar *callback, JsVar **args, int argCount);
@@ -53,8 +54,6 @@ void jsiQueueEvents(JsVar *object, JsVar *callback, JsVar **args, int argCount);
 bool jsiObjectHasCallbacks(JsVar *object, const char *callbackName);
 /// Queue up callbacks for other things (touchscreen? network?)
 void jsiQueueObjectCallbacks(JsVar *object, const char *callbackName, JsVar **args, int argCount);
-/// Execute callbacks straight away (like jsiQueueObjectCallbacks, but without queueing)
-void jsiExecuteObjectCallbacks(JsVar *object, const char *callbackName, JsVar **args, int argCount);
 /// Execute the given function/string/array of functions and return true on success, false on failure (break during execution)
 bool jsiExecuteEventCallback(JsVar *thisVar, JsVar *callbackVar, unsigned int argCount, JsVar **argPtr);
 /// Same as above, but with a JsVarArray (this calls jsiExecuteEventCallback, so use jsiExecuteEventCallback where possible)
@@ -66,6 +65,8 @@ bool jsiExecuteEventCallbackOn(const char *objectName, const char *cbName, unsig
 
 /// Create a timeout in JS to execute the given native function (outside of an IRQ). Returns the index
 JsVar *jsiSetTimeout(void (*functionPtr)(void), JsVarFloat milliseconds);
+/// Clear a timeout in JS given the index returned by jsiSetTimeout
+void jsiClearTimeout(JsVar *timeout);
 
 IOEventFlags jsiGetDeviceFromClass(JsVar *deviceClass);
 JsVar *jsiGetClassNameFromDevice(IOEventFlags device);
@@ -84,6 +85,7 @@ bool jsiIsConsoleDeviceForced();
 void jsiConsolePrintChar(char data);
 /// Transmit a string (may be any string)
 void jsiConsolePrintString(const char *str);
+void vcbprintf_callback_jsiConsolePrintString(const char *str, void* user_data);
 #ifndef USE_FLASH_MEMORY
 #define jsiConsolePrint jsiConsolePrintString
 /// Write the formatted string to the console (see vcbprintf)
@@ -109,13 +111,17 @@ void jsiConsolePrintStringVar(JsVar *v);
 void jsiConsoleRemoveInputLine();
 /// Change what is in the inputline into something else (and update the console)
 void jsiReplaceInputLine(JsVar *newLine);
+/** Clear the input line of data. If updateConsole is set, it
+ * sends VT100 characters to physically remove the line from
+ * the user's terminal. */
+void jsiClearInputLine(bool updateConsole);
 
 /// Flags for jsiSetBusy - THESE SHOULD BE 2^N
 typedef enum {
   BUSY_INTERACTIVE = 1,
   BUSY_TRANSMIT    = 2,
   // ???           = 4
-} JsiBusyDevice;
+} PACKED_FLAGS JsiBusyDevice;
 /// Shows a busy indicator, if one is set up
 void jsiSetBusy(JsiBusyDevice device, bool isBusy);
 
@@ -124,7 +130,7 @@ typedef enum {
   JSI_SLEEP_AWAKE  = 0,
   JSI_SLEEP_ASLEEP = 1,
   JSI_SLEEP_DEEP   = 2,
-} JsiSleepType;
+} PACKED_FLAGS JsiSleepType;
 
 /// Shows a sleep indicator, if one is set up
 void jsiSetSleep(JsiSleepType isSleep);
@@ -136,7 +142,9 @@ void jsiSetSleep(JsiSleepType isSleep);
 #define DEVICE_OPTIONS_NAME "_options"
 #define INIT_CALLBACK_NAME JS_EVENT_PREFIX"init" ///< Callback for `E.on('init'`
 #define KILL_CALLBACK_NAME JS_EVENT_PREFIX"kill" ///< Callback for `E.on('kill'`
+#ifndef ESPR_NO_PASSWORD
 #define PASSWORD_VARIABLE_NAME "pwd"
+#endif
 
 typedef enum {
   JSIS_NONE,
@@ -153,9 +161,13 @@ typedef enum {
   JSIS_TODO_MASK = JSIS_TODO_FLASH_SAVE|JSIS_TODO_FLASH_LOAD|JSIS_TODO_RESET,
   JSIS_CONSOLE_FORCED     = 1<<8, ///< see jsiSetConsoleDevice
   JSIS_WATCHDOG_AUTO      = 1<<9, ///< Automatically kick the watchdog timer on idle
-  JSIS_PASSWORD_PROTECTED = 1<<10, ///< Password protected
+  JSIS_PASSWORD_PROTECTED = 1<<10, ///< Password protected (only ifndef ESPR_NO_PASSWORD)
   JSIS_COMPLETELY_RESET   = 1<<11, ///< Has the board powered on *having not loaded anything from flash*
   JSIS_FIRST_BOOT         = 1<<12, ///< Is this the first time we started, or has load/reset/etc been called?
+
+  JSIS_EVENTEMITTER_PROCESSING = 1<<13, ///< Are we currently executing events with jsiExecuteEvent*
+  JSIS_EVENTEMITTER_STOP = 1<<14,       ///< Has E.stopEventPropagation() been called during event processing?
+  JSIS_EVENTEMITTER_INTERRUPTED = 1<<15,///< Has there been an error during jsiExecuteEvent* execution?
 
   JSIS_ECHO_OFF_MASK = JSIS_ECHO_OFF|JSIS_ECHO_OFF_FOR_LINE,
   JSIS_SOFTINIT_MASK = JSIS_PASSWORD_PROTECTED|JSIS_WATCHDOG_AUTO|JSIS_TODO_MASK|JSIS_FIRST_BOOT|JSIS_COMPLETELY_RESET // stuff that DOESN'T get reset on softinit

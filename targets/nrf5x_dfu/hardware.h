@@ -17,6 +17,7 @@
 #include "jspininfo.h"
 #include "nrf_gpio.h"
 #include "nrf_delay.h"
+#include "lcd.h"
 
 /// Because Nordic's library functions don't inline on NRF52840!
 #ifdef NRF_P1
@@ -32,6 +33,11 @@
 #define NRF_GPIO_PIN_WRITE_FAST(PIN,V) { if (V) NRF_P0->OUTSET=1<<(PIN); else NRF_P0->OUTCLR=1<<(PIN); }
 #define NRF_GPIO_PIN_READ_FAST(PIN) ((NRF_P0->IN >> (PIN))&1)
 #define NRF_GPIO_PIN_CNF(PIN,value) NRF_P0->PIN_CNF[PIN]=value;
+#endif
+
+#ifdef BANGLEJS_F18
+#define I2C_SDA 15
+#define I2C_SCL 14
 #endif
 
 // Using a macro means we hard-code values from pinInfo, and can ditch the pinInfo array
@@ -60,13 +66,14 @@ static void set_led_state(bool btn, bool progress)
 {
 #if defined(PIXLJS) || defined(BANGLEJS)
   // LED1 is backlight/HRM - don't use it!
-#else
-#if defined(LED2_PININDEX) && defined(LED3_PININDEX)
+#elif defined(PUCKJS_LITE)
+  jshPinOutput(LED1_PININDEX, progress);
+  jshPinOutput(LED2_PININDEX, btn);
+#elif defined(LED2_PININDEX) && defined(LED3_PININDEX)
   jshPinOutput(LED3_PININDEX, progress);
   jshPinOutput(LED2_PININDEX, btn);
 #elif defined(LED1_PININDEX)
   jshPinOutput(LED1_PININDEX, progress || btn);
-#endif
 #endif
 }
 
@@ -80,13 +87,35 @@ static bool get_btn2_state() {
   return jshPinGetValue(BTN2_PININDEX)==BTN2_ONSTATE;
 }
 #endif
+#ifdef BAT_PIN_CHARGING
+static bool get_charging_state() {
+  return jshPinGetValue(BAT_PIN_CHARGING)==0;
+}
+#endif
+
+static void print_fw_version(void) {
+  lcd_println("BL " JS_VERSION "\n");
+}
 
 static void hardware_init(void) {
+#ifdef I2C_SDA
+  nrf_gpio_cfg_input(I2C_SDA, NRF_GPIO_PIN_PULLUP);
+  nrf_gpio_cfg_input(I2C_SCL, NRF_GPIO_PIN_PULLUP);
+#endif
 #if defined(PIXLJS)
   // LED1 is backlight - don't use it, but ensure it's off
   jshPinOutput(LED1_PININDEX, 0);
 #endif
   set_led_state(false, false);
+#ifdef DICKENS // Simpler setup of BTN1 and BTN2 to save 48 bytes of code space
+  NRF_GPIO_PIN_CNF(BTN1_PININDEX,0x0000000c);     // BTN1 input (with pullup)
+  NRF_GPIO_PIN_CNF(BTN2_PININDEX,0x0000000c);     // BTN2 input (with pullup)
+  jshPinOutput(LCD_BL, !LCD_BL_ON);               // backlight off
+//  NRF_P1->OUT=0x00000001; // Backlight output high (for off)
+#ifdef BAT_PIN_CHARGING
+  NRF_GPIO_PIN_CNF(BAT_PIN_CHARGING,0x0000000c);     // Charge input (with pullup)
+#endif
+#else // !DICKENS
 #ifdef BTN1_PININDEX
   bool polarity;
   uint32_t pin;
@@ -107,7 +136,14 @@ static void hardware_init(void) {
   nrf_gpio_cfg_input(pin,
           polarity ? NRF_GPIO_PIN_PULLDOWN : NRF_GPIO_PIN_PULLUP);
 #endif
+#endif // !DICKENS
 #ifdef VIBRATE_PIN
   jshPinOutput(VIBRATE_PIN,0); // vibrate off
+#endif
+#ifdef GPS_PIN_EN
+  jshPinOutput(GPS_PIN_EN, 0); // GPS off
+#endif
+#ifdef HEARTRATE_PIN_EN
+  jshPinOutput(HEARTRATE_PIN_EN, 0); // HRM off
 #endif
 }

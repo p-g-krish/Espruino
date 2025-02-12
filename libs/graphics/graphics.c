@@ -14,7 +14,9 @@
 
 #include "graphics.h"
 #include "bitmap_font_4x6.h"
-
+#ifdef USE_FONT_6X8
+#include "bitmap_font_6x8.h"
+#endif
 
 #include "jsutils.h"
 #include "jsvar.h"
@@ -123,7 +125,7 @@ void graphicsStructResetState(JsGraphics *gfx) {
   } else
 #endif
   {
-    gfx->data.fgColor = 0xFFFFFFFF;
+    gfx->data.fgColor = (gfx->data.bpp>=32) ? 0xFFFFFFFF : ((1U<<gfx->data.bpp)-1);
     gfx->data.bgColor = 0;
   }
   gfx->data.fontSize = 1+JSGRAPHICS_FONTSIZE_4X6;
@@ -197,7 +199,7 @@ bool graphicsSetCallbacks(JsGraphics *gfx) {
     lcd_spi_unbuf_setCallbacks(gfx);
 #endif
   } else {
-    jsExceptionHere(JSET_INTERNALERROR, "Unknown graphics type\n");
+    // this should never happen
     assert(0);
     return false;
   }
@@ -208,7 +210,7 @@ bool graphicsSetCallbacks(JsGraphics *gfx) {
 bool graphicsGetFromVar(JsGraphics *gfx, JsVar *parent) {
   gfx->graphicsVar = parent;
   // jsvObjectGetChild can handle parent==NULL
-  JsVar *data = jsvObjectGetChild(parent, JS_HIDDEN_CHAR_STR"gfx", 0);
+  JsVar *data = jsvObjectGetChildIfExists(parent, JS_HIDDEN_CHAR_STR"gfx");
 #if ESPR_GRAPHICS_INTERNAL
   if (!data) {
     *gfx = graphicsInternal;
@@ -226,7 +228,7 @@ bool graphicsGetFromVar(JsGraphics *gfx, JsVar *parent) {
 
 // Set the data variable for graphics - called initially when a graphics instance is first make
 void graphicsSetVarInitial(JsGraphics *gfx) {
-  JsVar *dataname = jsvFindChildFromString(gfx->graphicsVar, JS_HIDDEN_CHAR_STR"gfx", true);
+  JsVar *dataname = jsvFindOrAddChildFromString(gfx->graphicsVar, JS_HIDDEN_CHAR_STR"gfx");
   JsVar *data = jsvSkipName(dataname);
   if (!data) {
     data = jsvNewStringOfLength(sizeof(JsGraphicsData), NULL);
@@ -240,7 +242,7 @@ void graphicsSetVarInitial(JsGraphics *gfx) {
 
 // Set the data variable for graphics - graphics data must exist
 void graphicsSetVar(JsGraphics *gfx) {
-  JsVar *data = jsvSkipNameAndUnLock(jsvFindChildFromString(gfx->graphicsVar, JS_HIDDEN_CHAR_STR"gfx", false));
+  JsVar *data = jsvSkipNameAndUnLock(jsvFindChildFromString(gfx->graphicsVar, JS_HIDDEN_CHAR_STR"gfx"));
 #if ESPR_GRAPHICS_INTERNAL
   if (!data) {
     graphicsInternal = *gfx;
@@ -262,6 +264,7 @@ size_t graphicsGetMemoryRequired(const JsGraphics *gfx) {
 
 // If graphics is flipped or rotated then the coordinates need modifying
 void graphicsToDeviceCoordinates(const JsGraphics *gfx, int *x, int *y) {
+#ifndef DICKENS // For Dickens, we can use Bangle.lcdWr(0x36, xxx) to set the screen rotation
   if (gfx->data.flags & JSGRAPHICSFLAGS_SWAP_XY) {
     int t = *x;
     *x = *y;
@@ -269,10 +272,23 @@ void graphicsToDeviceCoordinates(const JsGraphics *gfx, int *x, int *y) {
   }
   if (gfx->data.flags & JSGRAPHICSFLAGS_INVERT_X) *x = (int)(gfx->data.width - (*x+1));
   if (gfx->data.flags & JSGRAPHICSFLAGS_INVERT_Y) *y = (int)(gfx->data.height - (*y+1));
+#endif
+}
+
+// If graphics is flipped or rotated then the coordinates need modifying. This is to go back - eg for touchscreens
+void deviceToGraphicsCoordinates(const JsGraphics *gfx, int *x, int *y) {
+  if (gfx->data.flags & JSGRAPHICSFLAGS_INVERT_X) *x = (int)(gfx->data.width - (*x+1));
+  if (gfx->data.flags & JSGRAPHICSFLAGS_INVERT_Y) *y = (int)(gfx->data.height - (*y+1));
+  if (gfx->data.flags & JSGRAPHICSFLAGS_SWAP_XY) {
+    int t = *x;
+    *x = *y;
+    *y = t;
+  }
 }
 
 // If graphics is flipped or rotated then the coordinates need modifying
 void graphicsToDeviceCoordinates16x(const JsGraphics *gfx, int *x, int *y) {
+#ifndef DICKENS // For Dickens, we can use Bangle.lcdWr(0x36, xxx) to set the screen rotation
   if (gfx->data.flags & JSGRAPHICSFLAGS_SWAP_XY) {
     int t = *x;
     *x = *y;
@@ -280,6 +296,7 @@ void graphicsToDeviceCoordinates16x(const JsGraphics *gfx, int *x, int *y) {
   }
   if (gfx->data.flags & JSGRAPHICSFLAGS_INVERT_X) *x = (int)((gfx->data.width-1)*16 - *x);
   if (gfx->data.flags & JSGRAPHICSFLAGS_INVERT_Y) *y = (int)((gfx->data.height-1)*16 - *y);
+#endif
 }
 
 unsigned short graphicsGetWidth(const JsGraphics *gfx) {
@@ -289,23 +306,35 @@ unsigned short graphicsGetHeight(const JsGraphics *gfx) {
   return (gfx->data.flags & JSGRAPHICSFLAGS_SWAP_XY) ? gfx->data.width : gfx->data.height;
 }
 
-// Set the area modified by a draw command and also clip to the screen/clipping bounds
-bool graphicsSetModifiedAndClip(JsGraphics *gfx, int *x1, int *y1, int *x2, int *y2) {
+// Set the area modified by a draw command and also clip to the screen/clipping bounds. Returns true if clipped. If coordsRotatedAlready we assume the coordinates have gone through deviceToGraphicsCoordinates already
+bool graphicsSetModifiedAndClip(JsGraphics *gfx, int *x1, int *y1, int *x2, int *y2, bool coordsRotatedAlready) {
   bool modified = false;
 #ifndef NO_MODIFIED_AREA
-  if (*x1<gfx->data.clipRect.x1) { *x1 = gfx->data.clipRect.x1; modified = true; }
-  if (*y1<gfx->data.clipRect.y1) { *y1 = gfx->data.clipRect.y1; modified = true; }
-  if (*x2>gfx->data.clipRect.x2) { *x2 = gfx->data.clipRect.x2; modified = true; }
-  if (*y2>gfx->data.clipRect.y2) { *y2 = gfx->data.clipRect.y2; modified = true; }
+  int minX = gfx->data.clipRect.x1, minY = gfx->data.clipRect.y1;
+  int maxX = gfx->data.clipRect.x2, maxY = gfx->data.clipRect.y2;
+  if (coordsRotatedAlready) {
+    graphicsToDeviceCoordinates(gfx, &minX, &minY);
+    graphicsToDeviceCoordinates(gfx, &maxX, &maxY);
+    if (maxX < minX) {
+      int t = minX; minX = maxX; maxX = t;
+    }
+    if (maxY < minY) {
+      int t = minY; minY = maxY; maxY = t;
+    }
+  }
+#else
+  int minX = 0, minY = 0;
+  int maxX = gfx->data.width-1, maxY = gfx->data.height-1;
+#endif
+  if (*x1<minX) { *x1 = minX; modified = true; }
+  if (*y1<minY) { *y1 = minY; modified = true; }
+  if (*x2>maxX) { *x2 = maxX; modified = true; }
+  if (*y2>maxY) { *y2 = maxY; modified = true; }
+#ifndef NO_MODIFIED_AREA
   if (*x1 < gfx->data.modMinX) { gfx->data.modMinX=(short)*x1; modified = true; }
   if (*x2 > gfx->data.modMaxX) { gfx->data.modMaxX=(short)*x2; modified = true; }
   if (*y1 < gfx->data.modMinY) { gfx->data.modMinY=(short)*y1; modified = true; }
   if (*y2 > gfx->data.modMaxY) { gfx->data.modMaxY=(short)*y2; modified = true; }
-#else
-  if (*x1<0) { *x1 = 0; modified = true; }
-  if (*y1<0) { *y1 = 0; modified = true; }
-  if (*x2>=gfx->data.width) { *x2 = gfx->data.width-1; modified = true; }
-  if (*y2>=gfx->data.height) { *y2 = gfx->data.height-1; modified = true; }
 #endif
   return modified;
 }
@@ -328,13 +357,27 @@ JsGraphicsSetPixelFn graphicsGetSetPixelFn(JsGraphics *gfx) {
     return gfx->setPixel; // fast
 }
 
-/// Get a setPixel function (assuming no clipping by caller) - if all is ok it can choose a faster draw function
-JsGraphicsSetPixelFn graphicsGetSetPixelUnclippedFn(JsGraphics *gfx, int x1, int y1, int x2, int y2) {
+/// Get a setPixel function (assuming no clipping by caller) - if all is ok it can choose a faster draw function, but it chooses a slower one if clipping is needed
+JsGraphicsSetPixelFn graphicsGetSetPixelUnclippedFn(JsGraphics *gfx, int x1, int y1, int x2, int y2, bool coordsRotatedAlready) {
   if ((gfx->data.flags & JSGRAPHICSFLAGS_MAPPEDXY) ||
-      graphicsSetModifiedAndClip(gfx,&x1,&y1,&x2,&y2))
+      graphicsSetModifiedAndClip(gfx,&x1,&y1,&x2,&y2,coordsRotatedAlready))
     return graphicsSetPixel; // fallback
   else
     return gfx->setPixel; // fast
+}
+
+/// Merge one color into another based RGB565(amt is 0..256)
+uint16_t graphicsBlendColorRGB565(uint16_t f, uint16_t b, int amt) {
+  unsigned int br = (b>>11)&0x1F;
+  unsigned int bg = (b>>5)&0x3F;
+  unsigned int bb = b&0x1F;
+  unsigned int fr = (f>>11)&0x1F;
+  unsigned int fg = (f>>5)&0x3F;
+  unsigned int fb = f&0x1F;
+  unsigned int ri = (br*(256-amt) + fr*amt) >> 8;
+  unsigned int gi = (bg*(256-amt) + fg*amt) >> 8;
+  unsigned int bi = (bb*(256-amt) + fb*amt) >> 8;
+  return (bi | gi<<5 | ri<<11);
 }
 
 /// Merge one color into another based on current bit depth (amt is 0..256)
@@ -343,20 +386,9 @@ uint32_t graphicsBlendColor(JsGraphics *gfx, unsigned int fg, unsigned int bg, i
   if (amt>256) amt=256;
   if (gfx->data.bpp==2 || gfx->data.bpp==4 || gfx->data.bpp==8) {
     // TODO: if our graphics instance is paletted this isn't correct!
-    return (bg*(256-amt) + fg*amt) >> 8;
+    return (bg*(256-amt) + fg*amt + 127) >> 8;
   } else if (gfx->data.bpp==16) { // Blend from bg to fg
-    unsigned int b = bg;
-    unsigned int br = (b>>11)&0x1F;
-    unsigned int bg = (b>>5)&0x3F;
-    unsigned int bb = b&0x1F;
-    unsigned int f = fg;
-    unsigned int fr = (f>>11)&0x1F;
-    unsigned int fg = (f>>5)&0x3F;
-    unsigned int fb = f&0x1F;
-    unsigned int ri = (br*(256-amt) + fr*amt) >> 8;
-    unsigned int gi = (bg*(256-amt) + fg*amt) >> 8;
-    unsigned int bi = (bb*(256-amt) + fb*amt) >> 8;
-    return (bi | gi<<5 | ri<<11);
+    return graphicsBlendColorRGB565(fg,bg,iamt);
 #ifdef ESPR_GRAPHICS_12BIT
   } else if (gfx->data.bpp==12) { // Blend from bg to fg
     unsigned int b = bg;
@@ -500,6 +532,12 @@ void graphicsDrawRect(JsGraphics *gfx, int x1, int y1, int x2, int y2) {
 void graphicsDrawEllipse(JsGraphics *gfx, int posX1, int posY1, int posX2, int posY2){
   graphicsToDeviceCoordinates(gfx, &posX1, &posY1);
   graphicsToDeviceCoordinates(gfx, &posX2, &posY2);
+  if (posX1>posX2) {
+    int t=posX1;posX1=posX2;posX2=t;
+  }
+  if (posY1>posY2) {
+    int t=posY1;posY1=posY2;posY2=t;
+  }
 
   int posX =  (posX1+posX2)/2;
   int posY =  (posY1+posY2)/2;
@@ -533,6 +571,12 @@ void graphicsDrawEllipse(JsGraphics *gfx, int posX1, int posY1, int posX2, int p
 void graphicsFillEllipse(JsGraphics *gfx, int posX1, int posY1, int posX2, int posY2){
   graphicsToDeviceCoordinates(gfx, &posX1, &posY1);
   graphicsToDeviceCoordinates(gfx, &posX2, &posY2);
+  if (posX1>posX2) {
+    int t=posX1;posX1=posX2;posX2=t;
+  }
+  if (posY1>posY2) {
+    int t=posY1;posY1=posY2;posY2=t;
+  }
 
   int posX =  (posX1+posX2)/2;
   int posY =  (posY1+posY2)/2;
@@ -606,14 +650,14 @@ void graphicsDrawLine(JsGraphics *gfx, int x1, int y1, int x2, int y2) {
 
   int xl = x2-x1;
   int yl = y2-y1;
-  if (xl<0) xl=-xl; else if (xl==0) xl=1;
-  if (yl<0) yl=-yl; else if (yl==0) yl=1;
+  if (xl<0) xl=-xl;
+  if (yl<0) yl=-yl;
   if (xl > yl) { // longer in X - scan in X
     if (x1>x2) {
       int t;
       t = x1; x1 = x2; x2 = t;
       t = y1; y1 = y2; y2 = t;
-    }
+    } else if (xl==0) xl=1;
     int pos = (y1<<8) + 128; // rounding!
     int step = ((y2-y1)<<8) / xl;
     int x;
@@ -626,7 +670,7 @@ void graphicsDrawLine(JsGraphics *gfx, int x1, int y1, int x2, int y2) {
       int t;
       t = x1; x1 = x2; x2 = t;
       t = y1; y1 = y2; y2 = t;
-    }
+    } else if (yl==0) yl=1;
     int pos = (x1<<8) + 128; // rounding!
     int step = ((x2-x1)<<8) / yl;
     int y;
@@ -714,7 +758,7 @@ void graphicsDrawCircleAA(JsGraphics *gfx, int x0, int y0, int r){
   int i, x2, e2;
   r = 1-err;
   do {
-     i = 255-255*abs(err-2*(x+y)-2)/r;  
+     i = 255-255*abs(err-2*(x+y)-2)/r;
      graphicsSetPixelDeviceBlended(gfx, x0-x, y0+y, i);
      graphicsSetPixelDeviceBlended(gfx, x0-y, y0-x, i);
      graphicsSetPixelDeviceBlended(gfx, x0+x, y0-y, i);
@@ -828,19 +872,6 @@ void graphicsFillPoly(JsGraphics *gfx, int points, short *vertices) {
   }
 }
 
-/// Draw a simple 1bpp image in foreground colour
-void graphicsDrawImage1bpp(JsGraphics *gfx, int x1, int y1, int width, int height, const unsigned char *pixelData) {
-  int pixel = 256|*(pixelData++);
-  int x,y;
-  for (y=y1;y<y1+height;y++) {
-    for (x=x1;x<x1+width;x++) {
-      if (pixel&128) graphicsSetPixelDevice(gfx, x, y, gfx->data.fgColor);
-      pixel = pixel<<1;
-      if (pixel&65536) pixel = 256|*(pixelData++);
-    }
-  }
-}
-
 /// Scroll the graphics device (in user coords). X>0 = to right, Y >0 = down
 void graphicsScroll(JsGraphics *gfx, int xdir, int ydir) {
   // Ensure we flip coordinate system if needed
@@ -850,13 +881,7 @@ void graphicsScroll(JsGraphics *gfx, int xdir, int ydir) {
   graphicsToDeviceCoordinates(gfx, &x2, &y2);
   xdir = x2-x1;
   ydir = y2-y1;
-  // range check - if too big no point scrolling
-  bool scroll = true;
-  if (xdir>gfx->data.width) { xdir=gfx->data.width; scroll=false; }
-  if (xdir<-gfx->data.width) { xdir=-gfx->data.width; scroll=false; }
-  if (ydir>gfx->data.height) { ydir=gfx->data.height; scroll=false; }
-  if (ydir<-gfx->data.height) { ydir=-gfx->data.height; scroll=false; }
-  // do the scrolling
+  // work out cliprect
 #ifdef NO_MODIFIED_AREA
   x1=0;
   y1=0;
@@ -868,6 +893,15 @@ void graphicsScroll(JsGraphics *gfx, int xdir, int ydir) {
   x2=gfx->data.clipRect.x2;
   y2=gfx->data.clipRect.y2;
 #endif
+  // range check - if too big no point scrolling
+  bool scroll = true;
+  int w = 1+x2-x1;
+  int h = 1+y2-y1;
+  if (xdir>=w) { xdir=w; scroll=false; }
+  if (xdir<=-w) { xdir=-w; scroll=false; }
+  if (ydir>=h) { ydir=h; scroll=false; }
+  if (ydir<=-h) { ydir=-h; scroll=false; }
+  // do the scrolling
   if (scroll) gfx->scroll(gfx, xdir, ydir, x1,y1,x2,y2);
   graphicsSetModified(gfx, x1,y1,x2,y2);
   // fill the new area
@@ -880,17 +914,22 @@ void graphicsScroll(JsGraphics *gfx, int xdir, int ydir) {
 static void graphicsDrawString(JsGraphics *gfx, int x1, int y1, const char *str) {
   // no need to modify coordinates as setPixel does that
   while (*str) {
+#ifdef USE_FONT_6X8
+    graphicsDrawChar6x8(gfx,x1,y1,*(str++),1,1,false);
+    x1 = (int)(x1 + 6);
+#else
     graphicsDrawChar4x6(gfx,x1,y1,*(str++),1,1,false);
     x1 = (int)(x1 + 4);
+#endif
   }
 }
 
 // Splash screen
 void graphicsSplash(JsGraphics *gfx) {
   graphicsClear(gfx);
-  graphicsDrawString(gfx,0,0,"Espruino "JS_VERSION);
-  graphicsDrawString(gfx,0,6,"  Embedded JavaScript");
-  graphicsDrawString(gfx,0,12,"  www.espruino.com");
+  graphicsDrawString(gfx,60,20,"Espruino "JS_VERSION);
+  graphicsDrawString(gfx,60,30,"@2024 Gordon Williams");
+  graphicsDrawString(gfx,60,40,"www.espruino.com");
 }
 
 void graphicsIdle() {

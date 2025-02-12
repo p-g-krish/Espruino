@@ -24,14 +24,15 @@
   "type" : "class",
   "class" : "SPI"
 }
-This class allows use of the built-in SPI ports. Currently it is SPI master only.
+This class allows use of the built-in SPI ports. Currently it is SPI master
+only.
  */
 
 /*JSON{
   "type" : "object",
   "name" : "SPI1",
   "instanceof" : "SPI",
-  "#if" : "SPI_COUNT>=1"
+  "#if" : "ESPR_SPI_COUNT>=1"
 }
 The first SPI port
  */
@@ -39,7 +40,7 @@ The first SPI port
   "type" : "object",
   "name" : "SPI2",
   "instanceof" : "SPI",
-  "#if" : "SPI_COUNT>=2"
+  "#if" : "ESPR_SPI_COUNT>=2"
 }
 The second SPI port
  */
@@ -47,7 +48,7 @@ The second SPI port
   "type" : "object",
   "name" : "SPI3",
   "instanceof" : "SPI",
-  "#if" : "SPI_COUNT>=3"
+  "#if" : "ESPR_SPI_COUNT>=3"
 }
 The third SPI port
  */
@@ -59,7 +60,8 @@ The third SPI port
   "generate" : "jswrap_spi_constructor",
   "return" : ["JsVar","A SPI object"]
 }
-Create a software SPI port. This has limited functionality (no baud rate), but it can work on any pins.
+Create a software SPI port. This has limited functionality (no baud rate), but
+it can work on any pins.
 
 Use `SPI.setup` to configure this port.
  */
@@ -71,13 +73,15 @@ JsVar *jswrap_spi_constructor() {
   "type" : "staticmethod",
   "class" : "SPI",
   "name" : "find",
+  "deprecated" : true,
+  "ifndef" : "SAVE_ON_FLASH",
   "generate_full" : "jshGetDeviceObjectFor(JSH_SPI1, JSH_SPIMAX, pin)",
   "params" : [
     ["pin","pin","A pin to search with"]
   ],
   "return" : ["JsVar","An object of type `SPI`, or `undefined` if one couldn't be found."]
 }
-Try and find an SPI hardware device that will work on this pin (eg. `SPI1`)
+Try and find an SPI hardware device that will work on this pin (e.g. `SPI1`)
 
 May return undefined if no device can be found.
 */
@@ -97,23 +101,31 @@ Options can contain the following (defaults are shown where relevant):
 
 ```
 {
-  sck:pin, 
-  miso:pin, 
-  mosi:pin, 
+  sck:pin,
+  miso:pin,
+  mosi:pin,
   baud:integer=100000, // ignored on software SPI
   mode:integer=0, // between 0 and 3
-  order:string='msb' // can be 'msb' or 'lsb' 
+  order:string='msb' // can be 'msb' or 'lsb'
   bits:8 // only available for software SPI
 }
 ```
 
-If `sck`,`miso` and `mosi` are left out, they will automatically be chosen. However if one or more is specified then the unspecified pins will not be set up.
+If `sck`,`miso` and `mosi` are left out, they will automatically be chosen.
+However if one or more is specified then the unspecified pins will not be set
+up.
 
-You can find out which pins to use by looking at [your board's reference page](#boards) and searching for pins with the `SPI` marker. Some boards such as those based on `nRF52` chips can have SPI on any pins, so don't have specific markings.
+You can find out which pins to use by looking at [your board's reference
+page](#boards) and searching for pins with the `SPI` marker. Some boards such as
+those based on `nRF52` chips can have SPI on any pins, so don't have specific
+markings.
 
-The SPI `mode` is between 0 and 3 - see http://en.wikipedia.org/wiki/Serial_Peripheral_Interface_Bus#Clock_polarity_and_phase
+The SPI `mode` is between 0 and 3 - see
+http://en.wikipedia.org/wiki/Serial_Peripheral_Interface_Bus#Clock_polarity_and_phase
 
-On STM32F1-based parts, you cannot mix AF and non-AF pins (SPI pins are usually grouped on the chip - and you can't mix pins from two groups). Espruino will not warn you about this.
+On STM32F1-based parts, you cannot mix AF and non-AF pins (SPI pins are usually
+grouped on the chip - and you can't mix pins from two groups). Espruino will not
+warn you about this.
 */
 void jswrap_spi_setup(
     JsVar *parent, //!< The variable that is the class instance of this function.
@@ -137,7 +149,7 @@ void jswrap_spi_setup(
     jshSPISetup(device, &inf);
 #ifdef LINUX
     if (jsvIsObject(options)) {
-      jsvObjectSetChildAndUnLock(parent, "path", jsvObjectGetChild(options, "path", 0));
+      jsvObjectSetChildAndUnLock(parent, "path", jsvObjectGetChildIfExists(options, "path"));
     }
 #endif
   } else if (device == EV_NONE) {
@@ -150,10 +162,7 @@ void jswrap_spi_setup(
       jshPinSetState(inf.pinMOSI,  JSHPINSTATE_GPIO_OUT);
   } else return;
   // Set up options, so we can initialise it on startup
-  if (options)
-    jsvUnLock(jsvSetNamedChild(parent, options, DEVICE_OPTIONS_NAME));
-  else
-    jsvObjectRemoveChild(parent, DEVICE_OPTIONS_NAME);
+  jsvObjectSetOrRemoveChild(parent, DEVICE_OPTIONS_NAME, options);
 }
 
 
@@ -168,11 +177,16 @@ void jswrap_spi_setup(
   ],
   "return" : ["JsVar","The data that was returned"]
 }
-Send data down SPI, and return the result. Sending an integer will return an integer, a String will return a String, and anything else will return a Uint8Array.
+Send data down SPI, and return the result. Sending an integer will return an
+integer, a String will return a String, and anything else will return a
+Uint8Array.
 
-Sending multiple bytes in one call to send is preferable as they can then be transmitted end to end. Using multiple calls to send() will result in significantly slower transmission speeds.
+Sending multiple bytes in one call to send is preferable as they can then be
+transmitted end to end. Using multiple calls to send() will result in
+significantly slower transmission speeds.
 
-For maximum speeds, please pass either Strings or Typed Arrays as arguments. Note that you can even pass arrays of arrays, like `[1,[2,3,4],5]`
+For maximum speeds, please pass either Strings or Typed Arrays as arguments.
+Note that you can even pass arrays of arrays, like `[1,[2,3,4],5]`
 
  */
 typedef struct {
@@ -299,7 +313,8 @@ void jswrap_spi_write_cb(
     ["data","JsVarArray",["One or more items to write. May be ints, strings, arrays, or special objects (see `E.toUint8Array` for more info).","If the last argument is a pin, it is taken to be the NSS pin"]]
   ]
 }
-Write a character or array of characters to SPI - without reading the result back.
+Write a character or array of characters to SPI - without reading the result
+back.
 
 For maximum speeds, please pass either Strings or Typed Arrays as arguments.
  */
@@ -357,9 +372,12 @@ void jswrap_spi_write(
     ["nss_pin","pin","An nSS pin - this will be lowered before SPI output and raised afterwards (optional). There will be a small delay between when this is lowered and when sending starts, and also between sending finishing and it being raised."]
   ]
 }
-Send data down SPI, using 4 bits for each 'real' bit (MSB first). This can be useful for faking one-wire style protocols
+Send data down SPI, using 4 bits for each 'real' bit (MSB first). This can be
+useful for faking one-wire style protocols
 
-Sending multiple bytes in one call to send is preferable as they can then be transmitted end to end. Using multiple calls to send() will result in significantly slower transmission speeds.
+Sending multiple bytes in one call to send is preferable as they can then be
+transmitted end to end. Using multiple calls to send() will result in
+significantly slower transmission speeds.
  */
 void jswrap_spi_send4bit(JsVar *parent, JsVar *srcdata, int bit0, int bit1, Pin nss_pin) {
   if (!jsvIsObject(parent)) return;
@@ -427,9 +445,12 @@ void jswrap_spi_send4bit(JsVar *parent, JsVar *srcdata, int bit0, int bit1, Pin 
     ["nss_pin","pin","An nSS pin - this will be lowered before SPI output and raised afterwards (optional). There will be a small delay between when this is lowered and when sending starts, and also between sending finishing and it being raised"]
   ]
 }
-Send data down SPI, using 8 bits for each 'real' bit (MSB first). This can be useful for faking one-wire style protocols
+Send data down SPI, using 8 bits for each 'real' bit (MSB first). This can be
+useful for faking one-wire style protocols
 
-Sending multiple bytes in one call to send is preferable as they can then be transmitted end to end. Using multiple calls to send() will result in significantly slower transmission speeds.
+Sending multiple bytes in one call to send is preferable as they can then be
+transmitted end to end. Using multiple calls to send() will result in
+significantly slower transmission speeds.
  */
 void jswrap_spi_send8bit(JsVar *parent, JsVar *srcdata, int bit0, int bit1, Pin nss_pin) {
   if (!jsvIsObject(parent)) return;
@@ -487,9 +508,11 @@ void jswrap_spi_send8bit(JsVar *parent, JsVar *srcdata, int bit0, int bit1, Pin 
   "type" : "class",
   "class" : "I2C"
 }
-This class allows use of the built-in I2C ports. Currently it allows I2C Master mode only.
+This class allows use of the built-in I2C ports. Currently it allows I2C Master
+mode only.
 
-All addresses are in 7 bit format. If you have an 8 bit address then you need to shift it one bit to the right.
+All addresses are in 7 bit format. If you have an 8 bit address then you need to
+shift it one bit to the right.
  */
 /*JSON{
   "type" : "constructor",
@@ -498,7 +521,8 @@ All addresses are in 7 bit format. If you have an 8 bit address then you need to
   "generate" : "jswrap_i2c_constructor",
   "return" : ["JsVar","An I2C object"]
 }
-Create a software I2C port. This has limited functionality (no baud rate), but it can work on any pins.
+Create a software I2C port. This has limited functionality (no baud rate), but
+it can work on any pins.
 
 Use `I2C.setup` to configure this port.
  */
@@ -510,13 +534,15 @@ JsVar *jswrap_i2c_constructor() {
   "type" : "staticmethod",
   "class" : "I2C",
   "name" : "find",
+  "deprecated" : true,
+  "ifndef" : "SAVE_ON_FLASH",
   "generate_full" : "jshGetDeviceObjectFor(JSH_I2C1, JSH_I2CMAX, pin)",
   "params" : [
     ["pin","pin","A pin to search with"]
   ],
   "return" : ["JsVar","An object of type `I2C`, or `undefined` if one couldn't be found."]
 }
-Try and find an I2C hardware device that will work on this pin (eg. `I2C1`)
+Try and find an I2C hardware device that will work on this pin (e.g. `I2C1`)
 
 May return undefined if no device can be found.
 */
@@ -525,7 +551,7 @@ May return undefined if no device can be found.
   "type" : "object",
   "name" : "I2C1",
   "instanceof" : "I2C",
-  "#if" : "I2C_COUNT>=1"
+  "#if" : "ESPR_I2C_COUNT>=1"
 }
 The first I2C port
  */
@@ -533,7 +559,7 @@ The first I2C port
   "type" : "object",
   "name" : "I2C2",
   "instanceof" : "I2C",
-  "#if" : "I2C_COUNT>=2"
+  "#if" : "ESPR_I2C_COUNT>=2"
 }
 The second I2C port
  */
@@ -541,7 +567,7 @@ The second I2C port
   "type" : "object",
   "name" : "I2C3",
   "instanceof" : "I2C",
-  "#if" : "I2C_COUNT>=3"
+  "#if" : "ESPR_I2C_COUNT>=3"
 }
 The third I2C port
  */
@@ -554,12 +580,13 @@ The third I2C port
   "name" : "setup",
   "generate" : "jswrap_i2c_setup",
   "params" : [
-    ["options","JsVar",["An optional structure containing extra information on initialising the I2C port","```{scl:pin, sda:pin, bitrate:100000}```","You can find out which pins to use by looking at [your board's reference page](#boards) and searching for pins with the `I2C` marker. Note that 400kHz is the maximum bitrate for most parts."]]
+    ["options","JsVar",["[optional] A structure containing extra information on initialising the I2C port","```{scl:pin, sda:pin, bitrate:100000}```","You can find out which pins to use by looking at [your board's reference page](#boards) and searching for pins with the `I2C` marker. Note that 400kHz is the maximum bitrate for most parts."]]
   ]
 }
 Set up this I2C port
 
-If not specified in options, the default pins are used (usually the lowest numbered pins on the lowest port that supports this peripheral)
+If not specified in options, the default pins are used (usually the lowest
+numbered pins on the lowest port that supports this peripheral)
  */
 void jswrap_i2c_setup(JsVar *parent, JsVar *options) {
   if (!jsvIsObject(parent)) return;
@@ -592,10 +619,7 @@ void jswrap_i2c_setup(JsVar *parent, JsVar *options) {
 #endif
     }
     // Set up options, so we can initialise it on startup
-    if (options)
-      jsvUnLock(jsvSetNamedChild(parent, options, DEVICE_OPTIONS_NAME));
-    else
-      jsvObjectRemoveChild(parent, DEVICE_OPTIONS_NAME);
+    jsvObjectSetOrRemoveChild(parent, DEVICE_OPTIONS_NAME, options);
   }
 }
 
@@ -603,9 +627,9 @@ void jswrap_i2c_setup(JsVar *parent, JsVar *options) {
 static NO_INLINE int i2c_get_address(JsVar *address, bool *sendStop) {
   *sendStop = true;
   if (jsvIsObject(address)) {
-    JsVar *stopVar = jsvObjectGetChild(address, "stop", 0);
+    JsVar *stopVar = jsvObjectGetChildIfExists(address, "stop");
     if (stopVar) *sendStop = jsvGetBoolAndUnLock(stopVar);
-    return jsvGetIntegerAndUnLock(jsvObjectGetChild(address, "address", 0));
+    return jsvObjectGetIntegerChild(address, "address");
   } else
     return jsvGetInteger(address);
 }
@@ -621,34 +645,34 @@ static NO_INLINE int i2c_get_address(JsVar *address, bool *sendStop) {
     ["data","JsVarArray","One or more items to write. May be ints, strings, arrays, or special objects (see `E.toUint8Array` for more info)."]
   ]
 }
-Transmit to the slave device with the given address. This is like Arduino's beginTransmission, write, and endTransmission rolled up into one.
+Transmit to the slave device with the given address. This is like Arduino's
+beginTransmission, write, and endTransmission rolled up into one.
  */
-
+void _jswrap_i2c_writeTo(JsVar *parent, IOEventFlags device, int address, bool sendStop, int dataLen, unsigned char *dataPtr) {
+  if (DEVICE_IS_I2C(device)) {
+    jshI2CWrite(device, (unsigned char)address, (int)dataLen, (unsigned char*)dataPtr, sendStop);
+  } else if (device == EV_NONE) {
+#ifndef SAVE_ON_FLASH
+    // software
+    JshI2CInfo inf;
+    JsVar *options = jsvObjectGetChildIfExists(parent, DEVICE_OPTIONS_NAME);
+    if (jsi2cPopulateI2CInfo(&inf, options)) {
+      inf.started = jsvObjectGetBoolChild(parent, "started");
+      jsi2cWrite(&inf, (unsigned char)address, (int)dataLen, (unsigned char*)dataPtr, sendStop);
+    }
+    jsvUnLock2(jsvObjectSetChild(parent, "started", jsvNewFromBool(inf.started)), options);
+#endif
+  }
+}
 void jswrap_i2c_writeTo(JsVar *parent, JsVar *addressVar, JsVar *args) {
   if (!jsvIsObject(parent)) return;
   IOEventFlags device = jsiGetDeviceFromClass(parent);
 
   bool sendStop = true;
   int address = i2c_get_address(addressVar, &sendStop);
-
   JSV_GET_AS_CHAR_ARRAY( dataPtr, dataLen, args);
-
-  if (dataPtr && dataLen) {
-    if (DEVICE_IS_I2C(device)) {
-      jshI2CWrite(device, (unsigned char)address, (int)dataLen, (unsigned char*)dataPtr, sendStop);
-    } else if (device == EV_NONE) {
-#ifndef SAVE_ON_FLASH
-      // software
-      JshI2CInfo inf;
-      JsVar *options = jsvObjectGetChild(parent, DEVICE_OPTIONS_NAME, 0);
-      if (jsi2cPopulateI2CInfo(&inf, options)) {
-        inf.started = jsvGetBoolAndUnLock(jsvObjectGetChild(parent, "started", 0));
-        jsi2cWrite(&inf, (unsigned char)address, (int)dataLen, (unsigned char*)dataPtr, sendStop);
-      }
-      jsvUnLock2(jsvObjectSetChild(parent, "started", jsvNewFromBool(inf.started)), options);
-#endif
-    }
-  }
+  if (dataPtr && dataLen)
+    _jswrap_i2c_writeTo(parent, device, address, sendStop, (int)dataLen, (unsigned char*)dataPtr);
 }
 
 /*JSON{
@@ -660,22 +684,19 @@ void jswrap_i2c_writeTo(JsVar *parent, JsVar *addressVar, JsVar *args) {
     ["address","JsVar","The 7 bit address of the device to request bytes from, or an object of the form `{address:12, stop:false}` to send this data without a STOP signal."],
     ["quantity","int32","The number of bytes to request"]
   ],
-  "return" : ["JsVar","The data that was returned - as a Uint8Array"],
+  "return" : ["JsVar","The data that was returned - as a `Uint8Array`"],
   "return_object" : "Uint8Array"
 }
-Request bytes from the given slave device, and return them as a Uint8Array (packed array of bytes). This is like using Arduino Wire's requestFrom, available and read functions.  Sends a STOP
+Request bytes from the given slave device, and return them as a `Uint8Array`
+(packed array of bytes). This is like using Arduino Wire's requestFrom,
+available and read functions. Sends a STOP unless `{address:X, stop:false}` is used.
  */
-JsVar *jswrap_i2c_readFrom(JsVar *parent, JsVar *addressVar, int nBytes) {
-  if (!jsvIsObject(parent)) return 0;
-  IOEventFlags device = jsiGetDeviceFromClass(parent);
-
-  bool sendStop = true;
-  int address = i2c_get_address(addressVar, &sendStop);
+JsVar *_jswrap_i2c_readFrom(JsVar *parent, IOEventFlags device, int address,  bool sendStop, int nBytes) {
 
   if (nBytes<=0)
     return 0;
   if ((unsigned int)nBytes+256 > jsuGetFreeStack()) {
-    jsExceptionHere(JSET_ERROR, "Not enough free stack to receive this amount of data");
+    jsExceptionHere(JSET_ERROR, "Not enough stack memory for data");
     return 0;
   }
   unsigned char *buf = (unsigned char *)alloca((size_t)nBytes);
@@ -686,9 +707,9 @@ JsVar *jswrap_i2c_readFrom(JsVar *parent, JsVar *addressVar, int nBytes) {
 #ifndef SAVE_ON_FLASH
     // software
     JshI2CInfo inf;
-    JsVar *options = jsvObjectGetChild(parent, DEVICE_OPTIONS_NAME, 0);
+    JsVar *options = jsvObjectGetChildIfExists(parent, DEVICE_OPTIONS_NAME);
     if (jsi2cPopulateI2CInfo(&inf, options)) {
-      inf.started = jsvGetBoolAndUnLock(jsvObjectGetChild(parent, "started", 0));
+      inf.started = jsvObjectGetBoolChild(parent, "started");
       jsi2cRead(&inf, (unsigned char)address, nBytes, buf, sendStop);
     }
     jsvUnLock2(jsvObjectSetChild(parent, "started", jsvNewFromBool(inf.started)), options);
@@ -707,4 +728,47 @@ JsVar *jswrap_i2c_readFrom(JsVar *parent, JsVar *addressVar, int nBytes) {
     jsvArrayBufferIteratorFree(&it);
   }
   return array;
+}
+JsVar *jswrap_i2c_readFrom(JsVar *parent, JsVar *addressVar, int nBytes) {
+  if (!jsvIsObject(parent)) return 0;
+  IOEventFlags device = jsiGetDeviceFromClass(parent);
+
+  bool sendStop = true;
+  int address = i2c_get_address(addressVar, &sendStop);
+  return _jswrap_i2c_readFrom(parent, device, address, sendStop, nBytes);
+}
+
+
+/*JSON{
+  "type" : "method",
+  "class" : "I2C",
+  "name" : "readReg",
+  "generate" : "jswrap_i2c_readReg",
+  "params" : [
+    ["address","int","The 7 bit address of the device to request bytes from"],
+    ["reg","int","The register on the device to read bytes from"],
+    ["quantity","int","The number of bytes to request"]
+  ],
+  "return" : ["JsVar","The data that was returned - as a `Uint8Array`"],
+  "return_object" : "Uint8Array"
+}
+Request bytes from a register on the given I2C slave device, and return them as a `Uint8Array`
+(packed array of bytes).
+
+This is the same as calling `I2C.writeTo` and `I2C.readFrom`:
+
+```
+I2C.readReg = function(address, reg, quantity) {
+  this.writeTo({address:address, stop:false}, reg);
+  return this.readFrom(address, quantity);
+};
+```
+ */
+JsVar *jswrap_i2c_readReg(JsVar *parent, int address, int reg, int nBytes) {
+  if (!jsvIsObject(parent)) return 0;
+  IOEventFlags device = jsiGetDeviceFromClass(parent);
+  bool sendStop = false;
+  unsigned char i2cReg = (unsigned char)reg;
+  _jswrap_i2c_writeTo(parent, device, address, sendStop, 1, &i2cReg);
+  return _jswrap_i2c_readFrom(parent, device, address, sendStop, nBytes);
 }
