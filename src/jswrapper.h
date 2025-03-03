@@ -12,8 +12,8 @@
  * ----------------------------------------------------------------------------
  */
 
-#ifndef JSWRAPPER_H
-#define JSWRAPPER_H
+#ifndef JSWRAPPER_H_
+#define JSWRAPPER_H_
 
 #include "jsutils.h"
 #include "jsvar.h"
@@ -43,6 +43,7 @@ typedef enum {
   JSWAT_BOOL, ///< boolean
   JSWAT_INT32, ///< 32 bit int
   JSWAT_PIN, ///< A pin
+  JSWAT_FLOAT32, ///< 32 bit float
   JSWAT_JSVARFLOAT, ///< 64 bit float
   JSWAT__LAST = JSWAT_JSVARFLOAT,
   JSWAT_MASK = NEXT_POWER_2(JSWAT__LAST)-1,
@@ -66,13 +67,44 @@ typedef enum {
 // reads. Telling the compiler to pack the structs defeats that, so we have to take it out.
 #define PACKED_JSW_SYM
 #endif
+#if defined(__arm64__)
+#undef PACKED_JSW_SYM
+#define PACKED_JSW_SYM __attribute__((aligned(2)))
+#endif
 
-/// Structure for each symbol in the list of built-in symbols
+/// This is the Structure for storing each symbol in the list of built-in symbols (in flash)
+// JswSymPtr should be a multiple of 2 in length or jswBinarySearch will need READ_FLASH_UINT16
+#ifndef ESPR_PACKED_SYMPTR // 'Normal' symbol storage - strOffset is *not* packed into function pointer
 typedef struct {
   unsigned short strOffset;
   unsigned short functionSpec; // JsnArgumentType
   void (*functionPtr)(void);
 } PACKED_JSW_SYM JswSymPtr;
+// Macro used for defining entries in JswSymPtr jswSymbols_*
+#define JSWSYMPTR_ENTRY(offset, argSpec, pointer) \
+  { offset, argSpec, pointer}
+#define JSWSYMPTR_OFFSET(symPtr) \
+  ((symPtr)->strOffset)
+#define JSWSYMPTR_FUNCTION_PTR(symPtr) \
+  ((symPtr)->functionPtr)
+#else // ESPR_PACKED_SYMPTR - strOffset *is* packed into function pointer
+// On most ARM embedded targets we know the top 12 bits of the address are 0, so we use them for storing 'strOffset'
+typedef struct {
+  unsigned short functionSpec; // JsnArgumentType
+  // top 12 bits are used for strOffset - must mask with JSWSYMPTR_MASK
+  // stored in top 12 bits, shift right with JSWSYMPTR_SHIFT
+  size_t functionPtrAndStrOffset;
+} PACKED_JSW_SYM JswSymPtr;
+#define JSWSYMPTR_MASK 0xFFFFF // bottom 20 bits for function pointer
+#define JSWSYMPTR_SHIFT 20 // top 12 bits used for String offset
+// Macro used for defining entries in JswSymPtr jswSymbols_*
+#define JSWSYMPTR_ENTRY(offset, argSpec, pointer) \
+  { argSpec, (((size_t)pointer) + ((offset) << JSWSYMPTR_SHIFT)) }
+#define JSWSYMPTR_OFFSET(symPtr) \
+  ((symPtr)->functionPtrAndStrOffset >> JSWSYMPTR_SHIFT)
+#define JSWSYMPTR_FUNCTION_PTR(symPtr) \
+  (void (*)(void))((symPtr)->functionPtrAndStrOffset & JSWSYMPTR_MASK)
+#endif
 
 /// Information for each list of built-in symbols
 typedef struct {
@@ -117,15 +149,28 @@ void jswInit();
 /** Tasks to run on Deinitialisation */
 void jswKill();
 
-/** Tasks to run when a character is received on a certain event channel. True if handled and shouldn't go to IRQ */
+/** When called with an Object, fields are added for each device that is used with estimated power usage in uA (type:'powerusage' in JSON)  */
+void jswGetPowerUsage(JsVar *devices);
+
+/** Tasks to run when a character is received on a certain event channel. True if handled and shouldn't go to IRQ (type:'EV_SERIAL1/etc' in JSON)  */
 bool jswOnCharEvent(IOEventFlags channel, char charData);
+
+/** When we receive EV_CUSTOM, this is called so any library (eg Waveform) can hook onto it (type:'EV_CUSTOM' in JSON) */
+void jswOnCustomEvent(IOEventFlags eventFlags, uint8_t *data, int dataLen);
 
 /** If we get this in 'require', do we have the object for this
   inside the interpreter already? If so, return the native function
   pointer of the object's constructor */
 void *jswGetBuiltInLibrary(const char *name);
 
-/** If we have a built-in JS module with the given name, return the module's contents - or 0 */
+/** If we have a built-in JS module with the given name, return the module's contents - or 0.
+ * These can be added using teh followinf in the Makefile/BOARD.py file:
+ *
+ * JSMODULESOURCES+=path/to/modulename:path.js
+ * JSMODULESOURCES+=modulename:path/to/module.js
+ * JSMODULESOURCES+=_:code_to_run_at_startup.js
+ *
+ *  */
 const char *jswGetBuiltInJSLibrary(const char *name);
 
 /** Return a comma-separated list of built-in libraries */
@@ -137,4 +182,4 @@ const char *jswGetBuiltInLibraryNames();
 JsVar *jswCallFunctionHack(void *function, JsnArgumentType argumentSpecifier, JsVar *thisParam, JsVar **paramData, int paramCount);
 #endif
 
-#endif // JSWRAPPER_H
+#endif // JSWRAPPER_H_

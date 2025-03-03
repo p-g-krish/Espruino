@@ -31,14 +31,18 @@
 # PROFILE=1               # Compile with gprof profiling info
 # CFILE=test.c            # Compile in the supplied C file
 # CPPFILE=test.cpp        # Compile in the supplied C++ file
+# ESPRUINO_WRAPPERSOURCES=jswrap_x.c
+#                         # Compile in a wrapper file to the build (with JS functions in). WRAPPERSOURCES can be used too, but this adds the files to the END of the sources list
+# PYTHON=python3          # The python command used for this build
 #
 # WIZNET=1                # If compiling for a non-linux target that has internet support, use WIZnet W5500 support
 # W5100=1                 # Compile for WIZnet W5100 (not W5500)
 # CC3000=1                # If compiling for a non-linux target that has internet support, use CC3000 support
 # USB_PRODUCT_ID=0x1234   # force a specific USB Product ID (default 0x5740)
 #
-# GENDIR=MyGenDir		  # sets directory for files generated during make
-#					      # GENDIR=/home/mydir/mygendir
+# GENDIR=MyGenDir		      # sets directory for intermediate files generated during make
+# OBJDIR=MyObjDir		      # sets directory for object files generated during make
+# BINDIR=MyBinDir    		  # sets directory for binaries generated during make
 # SETDEFINES=FileDefines  # settings which are called after definitions for board are done
 #                         # SETDEFINES=/home/mydir/myDefines
 # UNSUPPORTEDMAKE=FileUnsu# Adds additional files from unsupported sources(means not supported by Gordon) to actual make
@@ -49,6 +53,7 @@
 #                         # BLACKLIST=/home/mydir/myBlackList
 # VARIABLES=1700          # Sets number of variables for project defined firmware. This parameter can be dangerous, be careful before changing.
 #                         # used in build_platform_config.py
+
 #
 # -- STM32 Only
 # PAD_FOR_BOOTLOADER=1    # Pad the binary out with 0xFF where the bootloader should be (allows the Web IDE to flash the binary)
@@ -58,12 +63,18 @@
 # DFU_UPDATE_BUILD=1      # Uncomment this to build Espruino for a device firmware update over the air (nRF52).
 #
 # -- ESP32 Only
-# RTOS=1                  # adds RTOS functions, available only for ESP32 
+# RTOS=1                  # adds RTOS functions, available only for ESP32
 
 include make/sanitycheck.make
 
 ifndef GENDIR
 GENDIR=gen
+endif
+ifndef OBJDIR
+OBJDIR=obj
+endif
+ifndef BINDIR
+BINDIR=bin
 endif
 
 ifndef SINGLETHREAD
@@ -73,7 +84,9 @@ endif
 INCLUDE?=-I$(ROOT) -I$(ROOT)/targets -I$(ROOT)/src -I$(GENDIR)
 LIBS?=
 DEFINES?=
-CFLAGS?=-Wall -Wextra -Wconversion -Werror=implicit-function-declaration -fno-strict-aliasing -g
+
+CFLAGS_C_COMPILER?= -Werror=implicit-function-declaration
+CFLAGS?=-Wall -Wextra -Wconversion -fno-strict-aliasing -g
 CFLAGS+=-Wno-packed-bitfield-compat # remove warnings from packed var usage
 
 CCFLAGS?= # specific flags when compiling cc files
@@ -86,8 +99,12 @@ ifeq ($(shell uname),Darwin)
 MACOSX=1
 CFLAGS+=-D__MACOSX__
 STAT_FLAGS='-f ''%z'''
+REALPATH='grealpath'
+TAR='gtar'
 else
 STAT_FLAGS='-c ''%s'''
+REALPATH='realpath'
+TAR='tar'
 endif
 
 ifeq ($(OS),Windows_NT)
@@ -98,6 +115,8 @@ ifdef RELEASE
 # force no asserts to be compiled in
 DEFINES += -DNO_ASSERT -DRELEASE
 endif
+
+PYTHON?=python
 
 ifndef ALT_RELEASE
 # Default release labeling.  (This may fail and give inconsistent results due to the fact that
@@ -172,9 +191,10 @@ endif
 #                                                      Get info out of BOARDNAME.py
 # ---------------------------------------------------------------------------------
 # TODO: could check board here and make clean if it's different?
-$(shell rm -f CURRENT_BOARD.make)
-$(shell python scripts/get_makefile_decls.py $(BOARD) > CURRENT_BOARD.make)
-include CURRENT_BOARD.make
+
+$(shell rm -f $(GENDIR)/CURRENT_BOARD.make)
+$(shell $(PYTHON) scripts/get_makefile_decls.py $(BOARD) > $(GENDIR)/CURRENT_BOARD.make)
+include $(GENDIR)/CURRENT_BOARD.make
 
 #set or reset defines like USE_GRAPHIC from an external file to customize firmware
 ifdef SETDEFINES
@@ -183,6 +203,7 @@ endif
 
 # ----------------------------- end of board defines ------------------------------
 # ---------------------------------------------------------------------------------
+
 
 
 # ---------------------------------------------------------------------------------
@@ -200,6 +221,8 @@ else ifeq ($(FAMILY),ESP8266)
 USE_ESP8266=1
 else ifeq ($(FAMILY),ESP32)
 USE_ESP32=1
+else ifeq ($(FAMILY),ESP32_IDF4)
+USE_ESP32=1
 else ifdef EMW3165
 USE_WICED=1
 else ifdef CC3000
@@ -211,12 +234,10 @@ endif
 ifdef DEBUG
 #OPTIMIZEFLAGS=-Os -g
  ifeq ($(FAMILY),ESP8266)
-  OPTIMIZEFLAGS=-g -Os -std=gnu11 -fgnu89-inline -Wl,--allow-multiple-definition
+  OPTIMIZEFLAGS=-g -Os -Wl,--allow-multiple-definition
+  CFLAGS_C_COMPILER= -std=gnu11 -fgnu89-inline
  else
   OPTIMIZEFLAGS=-g
- endif
- ifeq ($(FAMILY),EFM32GG)
-  DEFINES += -DDEBUG_EFM=1 -DDEBUG=1
  endif
 DEFINES+=-DDEBUG
 endif
@@ -231,6 +252,9 @@ TARGETSOURCES ?=
 # These are JS files to be included as pre-built Espruino modules
 JSMODULESOURCES ?=
 
+# These are jswrap_.c files specified on the command-line that get added to the build after other WRAPPERSOURCES
+ESPRUINO_WRAPPERSOURCES ?=
+
 # Files that contains objects/functions/methods that will be
 # exported to JS. The order here actually determines the order
 # objects will be matched in. So for example Pins must come
@@ -241,39 +265,50 @@ src/jswrap_arraybuffer.c \
 src/jswrap_dataview.c \
 src/jswrap_date.c \
 src/jswrap_error.c \
-src/jswrap_espruino.c \
-src/jswrap_flash.c \
 src/jswrap_functions.c \
-src/jswrap_interactive.c \
-src/jswrap_io.c \
 src/jswrap_json.c \
-src/jswrap_modules.c \
-src/jswrap_pin.c \
 src/jswrap_number.c \
 src/jswrap_object.c \
-src/jswrap_onewire.c \
+src/jswrap_regexp.c \
+src/jswrap_string.c \
+src/jswrap_modules.c \
+src/jswrap_math.c
+
+
+ifndef ESPR_EMBED # These are wrapper sources to do with hardware, if embedding we don't need these
+WRAPPERSOURCES += \
+src/jswrap_espruino.c \
+src/jswrap_flash.c \
+src/jswrap_interactive.c \
+src/jswrap_io.c \
+src/jswrap_pin.c \
 src/jswrap_pipe.c \
 src/jswrap_process.c \
+src/jswrap_onewire.c \
 src/jswrap_promise.c \
-src/jswrap_regexp.c \
 src/jswrap_serial.c \
 src/jswrap_storage.c \
 src/jswrap_spi_i2c.c \
+src/jswrap_stepper.c \
 src/jswrap_stream.c \
-src/jswrap_string.c \
-src/jswrap_waveform.c \
+src/jswrap_waveform.c
+endif
 
 # it is important that _pin comes before stuff which uses
 # integers (as the check for int *includes* the chek for pin)
 SOURCES += \
 src/jslex.c \
 src/jsflags.c \
-src/jsflash.c \
 src/jsvar.c \
 src/jsvariterator.c \
 src/jsutils.c \
 src/jsnative.c \
 src/jsparse.c \
+$(WRAPPERFILE)
+
+ifndef ESPR_EMBED # These are sources to do with hardware, if embedding we don't need these
+SOURCES += \
+src/jsflash.c \
 src/jspin.c \
 src/jsinteractive.c \
 src/jsdevices.c \
@@ -281,8 +316,10 @@ src/jstimer.c \
 src/jsi2c.c \
 src/jsserial.c \
 src/jsspi.c \
-src/jshardware_common.c \
-$(WRAPPERFILE)
+src/jshardware_common.c
+endif
+
+
 CPPSOURCES =
 CCSOURCES =
 
@@ -307,12 +344,9 @@ libs/compression/compress_rle.c
 
 else
 
-ifneq ($(FAMILY),ESP8266)
 # If we have enough flash, include the debugger
-# ESP8266 can't do it because it expects tasks to finish within set time
 ifneq ($(USE_DEBUGGER),0)
 DEFINES+=-DUSE_DEBUGGER
-endif
 endif
 # Use use tab complete
 ifneq ($(USE_TAB_COMPLETE),0)
@@ -332,6 +366,15 @@ endif
 
 ifndef BOOTLOADER # ------------------------------------------------------------------------------ DON'T USE IN BOOTLOADER
 
+ifeq ($(FAMILY),ESP8266)
+# special ESP8266 maths lib that doesn't go into RAM
+LIBS += -lmirom
+LDFLAGS += -L$(ROOT)/targets/esp8266
+else
+# everything else uses normal maths lib
+LIBS += -lm
+endif
+
 ifeq ($(USE_FILESYSTEM),1)
 DEFINES += -DUSE_FILESYSTEM
 INCLUDE += -I$(ROOT)/libs/filesystem
@@ -347,9 +390,8 @@ libs/filesystem/fat_sd/option/unicode.c # for LFN support (see _USE_LFN in ff.h)
 
 ifeq ($(USE_FILESYSTEM_SDIO),1)
 DEFINES += -DUSE_FILESYSTEM_SDIO
-SOURCES += \
-libs/filesystem/fat_sd/sdio_diskio.c \
-libs/filesystem/fat_sd/sdio_sdcard.c
+SOURCES += libs/filesystem/fat_sd/sdio_diskio.c
+# sdio_sdcard_X.c is added in make/family/X.make
 else #USE_FILESYSTEM_SDIO
 ifdef USE_FLASHFS
 DEFINES += -DUSE_FLASHFS
@@ -363,18 +405,6 @@ endif #USE_FILESYSTEM_SDIO
 endif #!LINUX
 endif #USE_FILESYSTEM
 
-DEFINES += -DUSE_MATH
-INCLUDE += -I$(ROOT)/libs/math
-WRAPPERSOURCES += libs/math/jswrap_math.c
-ifeq ($(FAMILY),ESP8266)
-# special ESP8266 maths lib that doesn't go into RAM
-LIBS += -lmirom
-LDFLAGS += -L$(ROOT)/targets/esp8266
-else
-# everything else uses normal maths lib
-LIBS += -lm
-endif
-
 ifeq ($(USE_GRAPHICS),1)
 DEFINES += -DUSE_GRAPHICS
 INCLUDE += -I$(ROOT)/libs/graphics
@@ -383,6 +413,7 @@ SOURCES += \
 libs/graphics/bitmap_font_4x6.c \
 libs/graphics/bitmap_font_6x8.c \
 libs/graphics/vector_font.c \
+libs/graphics/pbf_font.c \
 libs/graphics/graphics.c \
 libs/graphics/lcd_arraybuffer.c \
 libs/graphics/lcd_js.c
@@ -422,6 +453,12 @@ endif
 ifeq ($(USE_TERMINAL),1)
   DEFINES += -DUSE_TERMINAL
   WRAPPERSOURCES += libs/graphics/jswrap_terminal.c
+endif
+
+ifeq ($(USE_SWDCON),1)
+  DEFINES += -DUSE_SWDCON
+  WRAPPERSOURCES += libs/swdcon/jswrap_swdcon.c
+# directly included so not needed SOURCES += libs/swdcon/SEGGER_RTT_custom.c
 endif
 
 endif
@@ -526,7 +563,6 @@ endif
   targets/esp32/jshardwareAnalog.c \
   targets/esp32/jshardwarePWM.c \
   targets/esp32/rtosutil.c \
-  targets/esp32/jshardwareTimer.c \
   targets/esp32/jshardwarePulse.c
   ifdef RTOS
    DEFINES += -DRTOS
@@ -594,7 +630,7 @@ ifeq ($(USE_CRYPTO),1)
     include make/crypto/$(FAMILY).make
   else
     include make/crypto/default.make
-  endif 
+  endif
 endif
 
 ifeq ($(USE_NEOPIXEL),1)
@@ -640,8 +676,13 @@ ifeq ($(USE_WIO_LTE),1)
   SOURCES += targets/stm32/stm32_ws2812b_driver.c
 endif
 
-ifeq ($(USE_TENSORFLOW),1) 
+ifeq ($(USE_TENSORFLOW),1)
 include make/misc/tensorflow.make
+endif
+
+ifeq ($(USE_JIT),1)
+  DEFINES += -DESPR_JIT
+  SOURCES += src/jsjit.c src/jsjitc.c
 endif
 
 
@@ -652,7 +693,6 @@ endif # BOOTLOADER ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ DON'T USE STUFF AB
 .PHONY:  proj
 
 all: 	 proj
-
 # =========================================================================
 ifneq ($(FAMILY),)
 include make/family/$(FAMILY).make
@@ -666,17 +706,24 @@ endif
 
 PININFOFILE=$(GENDIR)/jspininfo
 SOURCES += $(PININFOFILE).c
-
+WRAPPERSOURCES += $(ESPRUINO_WRAPPERSOURCES)
 SOURCES += $(WRAPPERSOURCES) $(TARGETSOURCES)
-SOURCEOBJS = $(SOURCES:.c=.o) $(CPPSOURCES:.cpp=.o) $(CCSOURCES:.cc=.o)
+SOURCEOBJS = $(patsubst %.c,$(OBJDIR)/%.o,$(SOURCES))
+ifdef CPPSOURCES
+SOURCEOBJS += $(patsubst %.cpp,$(OBJDIR)/%.cpp.o,$(CPPSOURCES))
+endif
+ifdef CCSOURCES
+SOURCEOBJS += $(patsubst %.cc,$(OBJDIR)/%.cc.o,$(CCSOURCES))
+endif
 OBJS = $(PRECOMPILED_OBJS) $(SOURCEOBJS)
 
 
 # -ffreestanding -nodefaultlibs -nostdlib -fno-common
 # -nodefaultlibs -nostdlib -nostartfiles
-
 # -fdata-sections -ffunction-sections are to help remove unused code
-CFLAGS += $(OPTIMIZEFLAGS) -c $(ARCHFLAGS) $(DEFINES) $(INCLUDE)
+
+# See the build_platform_config.py/platform_config.h for notes on why we define ESPR_DEFINES_ON_COMMANDLINE
+CFLAGS += $(OPTIMIZEFLAGS) -c $(ARCHFLAGS) $(DEFINES) $(INCLUDE) -DESPR_DEFINES_ON_COMMANDLINE
 
 # -Wl,--gc-sections helps remove unused code
 # -Wl,--whole-archive checks for duplicates
@@ -685,9 +732,6 @@ ifdef NRF5X
  LDFLAGS += $(OPTIMIZEFLAGS) $(ARCHFLAGS) --specs=nano.specs -lc -lnosys
 else ifdef STM32
  LDFLAGS += $(OPTIMIZEFLAGS) $(ARCHFLAGS) --specs=nano.specs -lc -lnosys
-else ifdef EFM32
- LDFLAGS += $(OPTIMIZEFLAGS) $(ARCHFLAGS)
- LDFLAGS += -Wl,--start-group -lgcc -lc -lnosys -Wl,--end-group
 else
  LDFLAGS += $(OPTIMIZEFLAGS) $(ARCHFLAGS)
 endif
@@ -737,51 +781,49 @@ endif
 # =============================================================================
 
 boardjson: scripts/build_board_json.py $(WRAPPERSOURCES)
-	@echo Generating Board JSON
+	@echo ================================== Generating Board JSON
 	$(Q)echo WRAPPERSOURCES = $(WRAPPERSOURCES)
 	$(Q)echo DEFINES =  $(DEFINES)
 ifdef USE_NET
         # hack to ensure that Pico/etc have all possible firmware configs listed
-	$(Q)python scripts/build_board_json.py $(WRAPPERSOURCES) $(DEFINES) -DUSE_WIZNET=1 -DUSE_CC3000=1 -B$(BOARD)
+	$(Q)$(PYTHON) scripts/build_board_json.py $(WRAPPERSOURCES) $(DEFINES) -DUSE_WIZNET=1 -DUSE_CC3000=1 -B$(BOARD)
 else
-	$(Q)python scripts/build_board_json.py $(WRAPPERSOURCES) $(DEFINES) -B$(BOARD)
+	$(Q)$(PYTHON) scripts/build_board_json.py $(WRAPPERSOURCES) $(DEFINES) -B$(BOARD)
 endif
 
 docs:
-	@echo Generating Board docs
+	@echo ================================== Generating Board docs
 	$(Q)python scripts/build_docs.py $(WRAPPERSOURCES) $(DEFINES) -B$(BOARD)
 	@echo functions.html created
 
 $(WRAPPERFILE): scripts/build_jswrapper.py $(WRAPPERSOURCES)
-	@echo Generating JS wrappers
+	@echo ================================== Generating JS wrappers
 	$(Q)echo WRAPPERSOURCES = $(WRAPPERSOURCES)
 	$(Q)echo DEFINES =  $(DEFINES)
-	$(Q)python scripts/build_jswrapper.py $(WRAPPERSOURCES) $(JSMODULESOURCES) $(DEFINES) -B$(BOARD) -F$(WRAPPERFILE)
+	$(Q)$(PYTHON) scripts/build_jswrapper.py $(WRAPPERSOURCES) $(JSMODULESOURCES) $(DEFINES) -B$(BOARD) -F$(WRAPPERFILE)
 
 ifdef PININFOFILE
 $(PININFOFILE).c $(PININFOFILE).h: scripts/build_pininfo.py
-	@echo Generating pin info
-	$(Q)python scripts/build_pininfo.py $(BOARD) $(PININFOFILE).c $(PININFOFILE).h
+	@echo ================================== Generating pin info
+	$(Q)$(PYTHON) scripts/build_pininfo.py $(BOARD) $(PININFOFILE).c $(PININFOFILE).h
 endif
 
 ifndef NRF5X # nRF5x devices use their own linker files that aren't automatically generated.
-ifndef EFM32
 $(LINKER_FILE): scripts/build_linker.py
-	@echo Generating linker scripts
-	$(Q)python scripts/build_linker.py $(BOARD) $(LINKER_FILE) $(BUILD_LINKER_FLAGS)
-endif # EFM32
+	@echo ================================== Generating linker scripts
+	$(Q)$(PYTHON) scripts/build_linker.py $(BOARD) $(LINKER_FILE) $(BUILD_LINKER_FLAGS)
 endif # NRF5X
 
 $(PLATFORM_CONFIG_FILE): boards/$(BOARD).py scripts/build_platform_config.py
-	@echo Generating platform configs
-	$(Q)python scripts/build_platform_config.py $(BOARD) $(HEADERFILENAME)
+	@echo ================================== Generating platform configs
+	$(Q)$(PYTHON) scripts/build_platform_config.py $(BOARD) $(HEADERFILENAME) $(DEFINES)
 
 # If realpath exists, use relative paths
-ifneq ("$(shell realpath --version > /dev/null;echo "$$?")","0")
-compile=$(CC) $(CFLAGS) $< -o $@
+ifneq ("$(shell ${REALPATH} --version > /dev/null;echo "$$?")","0")
+compile=$(CC) $(CFLAGS_C_COMPILER) $(CFLAGS) $< -o $@
 else
 # when macros use __FILE__ this stops us including the whole build path
-compile=$(CC) $(CFLAGS) $(shell realpath --relative-to $(shell pwd) $<) -o $@
+compile=$(CC) $(CFLAGS_C_COMPILER) $(CFLAGS) $(shell ${REALPATH} --relative-to $(shell pwd) $<) -o $@
 endif
 
 link=$(LD) $(LDFLAGS) -o $@ $(OBJS) $(LIBS)
@@ -795,35 +837,44 @@ quiet_link= LD $@
 quiet_obj_dump= GEN $(PROJ_NAME).lst
 quiet_obj_to_bin= GEN $(PROJ_NAME).$2
 
-%.o: %.c $(PLATFORM_CONFIG_FILE) $(PININFOFILE).h
+$(OBJDIR)/%.o: %.c $(PLATFORM_CONFIG_FILE) $(PININFOFILE).h
 	@echo $($(quiet_)compile)
+	@mkdir -p $(shell dirname $@) # create directory if it doesn't exist
 	@$(call compile)
 
-.cc.o: %.cc $(PLATFORM_CONFIG_FILE) $(PININFOFILE).h
+$(OBJDIR)/%.cc.o: %.cc $(PLATFORM_CONFIG_FILE) $(PININFOFILE).h
 	@echo $($(quiet_)compile)
+	@mkdir -p $(shell dirname $@) # create directory if it doesn't exist
 	@$(CC) $(CCFLAGS) $(CFLAGS) $< -o $@
 
-.cpp.o: $(PLATFORM_CONFIG_FILE) $(PININFOFILE).h
+$(OBJDIR)/%.cpp.o: $(PLATFORM_CONFIG_FILE) $(PININFOFILE).h
 	@echo $($(quiet_)compile)
+	@mkdir -p $(shell dirname $@) # create directory if it doesn't exist
 	@$(call compile)
 
 # case sensitive - Nordic's files are capitals
-.s.o:
+$(OBJDIR)/%.s.o:
 	@echo $($(quiet_)compile)
+	@mkdir -p $(shell dirname $@) # create directory if it doesn't exist
 	@$(call compile)
 
-.S.o:
+$(OBJDIR)/%.S.o:
 	@echo $($(quiet_)compile)
+	@mkdir -p $(shell dirname $@) # create directory if it doesn't exist
 	@$(call compile)
 
 ifdef LINUX # ---------------------------------------------------
 include make/targets/LINUX.make
 else ifdef EMSCRIPTEN
 include make/targets/EMSCRIPTEN.make
+else ifdef ESP32_IDF4
+include make/targets/ESP32_IDF4.make
 else ifdef ESP32
 include make/targets/ESP32.make
 else ifdef ESP8266
 include make/targets/ESP8266.make
+else ifdef ESPR_EMBED
+include make/targets/EMBED.make
 else # ARM/etc, so generate bin, etc ---------------------------
 include make/targets/ARM.make
 endif	    # ---------------------------------------------------
@@ -832,15 +883,20 @@ lst: $(PROJ_NAME).lst
 
 clean:
 	@echo Cleaning targets
-	$(Q)find . -name \*.o | grep -v "./arm-bcm2708\|./gcc-arm-none-eabi" | xargs rm -f
-	$(Q)find . -name \*.d | grep -v "./arm-bcm2708\|./gcc-arm-none-eabi" | xargs rm -f
-	$(Q)rm -f $(ROOT)/gen/*.c $(ROOT)/gen/*.h $(ROOT)/gen/*.ld
+	$(Q)rm -rf $(OBJDIR)/* $(BINDIR)/build $(BINDIR)/main
+	$(Q)rm -f $(GENDIR)/*.c $(GENDIR)/*.h $(GENDIR)/*.ld
 	$(Q)rm -f $(ROOT)/scripts/*.pyc $(ROOT)/boards/*.pyc
 	$(Q)rm -f $(PROJ_NAME).elf
 	$(Q)rm -f $(PROJ_NAME).hex
 	$(Q)rm -f $(PROJ_NAME).bin
 	$(Q)rm -f $(PROJ_NAME).srec
 	$(Q)rm -f $(PROJ_NAME).lst
+	$(Q)rm -f $(PROJ_NAME).app_hex
+	$(Q)rm -f $(PROJ_NAME).uf2
+	$(Q)rm -f $(BINDIR)/espruino_embedded.h
+	$(Q)rm -f $(BINDIR)/espruino_embedded.c
+	$(Q)rm -f $(BINDIR)/jstypes.h
+	$(Q)rm -f $(ROOT)/targetlibs/nrf5x_*/components/toolchain/gcc/gcc_startup_nrf5*.o $(ROOT)/targetlibs/nrf5x_*/modules/nrfx/mdk/gcc_startup_nrf5*.o $(ROOT)/targetlibs/stm32f4/lib/startup_stm32f4*.o $(ROOT)/targetlibs/stm32f1/lib/startup_stm32f10x_*.o
 
 wrappersources:
 	$(info WRAPPERSOURCES=$(WRAPPERSOURCES))

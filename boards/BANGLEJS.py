@@ -16,8 +16,8 @@
 import pinutils;
 
 info = {
- 'name' : "Espruino Bangle.js",
- 'link' :  [ "http://www.espruino.com/Bangle.js" ],
+ 'name' : "Bangle.js",
+ 'link' :  [ "https://espruino.com/Bangle.js" ],
  'espruino_page_link' : 'Bangle.js',
  'default_console' : "EV_BLUETOOTH",
  'variables' : 2584, # How many variables are allocated for Espruino to use. RAM will be overflowed if this number is too high and code won't compile.
@@ -28,11 +28,14 @@ info = {
    'libraries' : [
      'BLUETOOTH',
      'TERMINAL',
-     'GRAPHICS', 
+     'GRAPHICS',
      'LCD_ST7789_8BIT',
-     'TENSORFLOW'     
+     'TENSORFLOW',
+     'JIT'
    ],
    'makefile' : [
+     'DEFINES+=-DESPR_OFFICIAL_BOARD', # Don't display the donations nag screen
+     'BLACKLIST=boards/BANGLEJS.blocklist', # force some stuff to be removed to save space
      'DEFINES += -DESPR_HWVERSION=1',
      'DEFINES += -DBANGLEJS_F18',
      'DEFINES += -DCONFIG_NFCT_PINS_AS_GPIOS', # Allow the reset pin to work
@@ -44,11 +47,15 @@ info = {
      'DEFINES+=-DBLUETOOTH_ADVERTISING_INTERVAL=200', # since we don't care as much about ~20uA battery usage, raise this to make getting a connection faster
      'ESPR_BLUETOOTH_ANCS=1', # Enable ANCS (Apple notifications) support
      'DEFINES+=-DCUSTOM_GETBATTERY=jswrap_banglejs_getBattery',
+     'DEFINES+=-DESPR_UNICODE_SUPPORT=1',
+     'DEFINES+=-DESPR_NO_SOFTWARE_SERIAL=1',
      'DEFINES+=-DDUMP_IGNORE_VARIABLES=\'"g\\0"\'',
+     'DEFINES+=-DSAVE_ON_FLASH_MATH', 
+     'DEFINES+=-DESPR_PACKED_SYMPTR', # Pack builtin symbols' offset into pointer to save 2 bytes/symbol
      'DEFINES+=-DESPR_GRAPHICS_INTERNAL=1',
-     'DEFINES+=-DUSE_FONT_6X8 -DGRAPHICS_PALETTED_IMAGES -DGRAPHICS_ANTIALIAS',
+     'DEFINES+=-DUSE_FONT_6X8 -DGRAPHICS_PALETTED_IMAGES -DGRAPHICS_ANTIALIAS -DESPR_PBF_FONTS',
      'DEFINES+=-DNO_DUMP_HARDWARE_INITIALISATION', # don't dump hardware init - not used and saves 1k of flash
-     'DEFINES += -DESPR_NO_LINE_NUMBERS=1', # we execute mainly from flash, so line numbers can be worked out
+     'DEFINES+=-DESPR_NO_LINE_NUMBERS=1', # we execute mainly from flash, so line numbers can be worked out
      'DEFINES+=-DAPP_TIMER_OP_QUEUE_SIZE=6', # Bangle.js accelerometer poll handler needs something else in queue size
      'DFU_PRIVATE_KEY=targets/nrf5x_dfu/dfu_private_key.pem',
      'DFU_SETTINGS=--application-version 0xff --hw-version 52 --sd-req 0x8C,0x91',
@@ -61,7 +68,14 @@ info = {
      'JSMODULESOURCES += libs/js/banglejs/locale.min.js',
      'NRF_BL_DFU_INSECURE=1',
      'LINKER_BOOTLOADER=targetlibs/nrf5x_12/nrf5x_linkers/banglejs_dfu.ld',
-     'LINKER_ESPRUINO=targetlibs/nrf5x_12/nrf5x_linkers/banglejs_espruino.ld'
+     'LINKER_ESPRUINO=targetlibs/nrf5x_12/nrf5x_linkers/banglejs_espruino.ld',
+# Uncomment these lines to allow the Bangle.js 1 bootloader to check external flash for firmware and
+# update from there. We do this by default on Bangle.js 2 but on Bangle.js 1 it's  bit tight to get it into
+# available flash memory. See #2449
+#     'DEFINES += -DESPR_BOOTLOADER_SPIFLASH', # Allow bootloader to flash direct from SPI flash
+#     'BOOTLOADER_DEFINES += -DNRF_BL_DFU_TRIM_EXTREME',
+#     'BOOTLOADER_LDFLAGS += -nostartfiles',
+#     'BOOTLOADER_ASFLAGS += -D__STARTUP_CLEAR_BSS -D__START=main',
    ]
  }
 };
@@ -75,8 +89,8 @@ chip = {
   'flash' : 512,
   'speed' : 64,
   'usart' : 1,
-  'spi' : 1,
-  'i2c' : 1,
+  'spi' : 0, # hardware supports 1, but we don't use these
+  'i2c' : 0, # hardware supports 1, but we don't use these
   'adc' : 1,
   'dac' : 0,
   'saved_code' : {
@@ -115,7 +129,7 @@ devices = {
   'GPS' : {
             'device' : 'M8130-KT',
 #            'pin_en' : '', # IO expander P0
-            'pin_rx' : 'D25', 
+            'pin_rx' : 'D25',
             'pin_tx' : 'D26'
           },
   'BAT' : {
@@ -133,7 +147,7 @@ devices = {
             'pin_scl' : 'D14'
           },
   'MAG' : { # Magnetometer/compass
-            'device' : 'GMC303', 
+            'device' : 'GMC303',
             'addr' : 0x0C,
             'pin_sda' : 'D15',
             'pin_scl' : 'D14'
@@ -156,13 +170,7 @@ devices = {
 
 # left-right, or top-bottom order
 board = {
-  'left' : [],
-  'right' : [],
-  '_notes' : {
-  }
 };
-board["_css"] = """
-""";
 
 def get_pins():
   pins = pinutils.generate_pins(0,31) # 32 General Purpose I/O Pins.
@@ -182,7 +190,8 @@ def get_pins():
   pinutils.findpin(pins, "PD22", True)["functions"]["NEGATED"]=0; # btn
   pinutils.findpin(pins, "PD23", True)["functions"]["NEGATED"]=0; # btn
   pinutils.findpin(pins, "PD24", True)["functions"]["NEGATED"]=0; # btn
-  
+  for pin in pins:
+    pin["functions"]["NO_BLOCKLY"]=0;  # hide in blockly
 
   # everything is non-5v tolerant
   for pin in pins:

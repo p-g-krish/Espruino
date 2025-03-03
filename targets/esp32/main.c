@@ -1,3 +1,5 @@
+#include <stdio.h>
+
 #include "freertos/FreeRTOS.h"
 #include "esp_wifi.h"
 #include "esp_system.h"
@@ -5,14 +7,12 @@
 #include "esp_event_loop.h"
 #include "nvs_flash.h"
 
-#include <stdio.h>
 #include <jsdevices.h>
 #include <jsinteractive.h>
 #include "rtosutil.h"
 #include "jstimer.h"
 #include "jshardwareUart.h"
 #include "jshardwareAnalog.h"
-#include "jshardwareTimer.h"
 #include "jshardwarePWM.h"
 #include "jshardwarePulse.h"
 #include "jshardwareSpi.h"
@@ -23,9 +23,15 @@
 #ifdef BLUETOOTH
 #include "libs/bluetooth/bluetooth.h"
 #include "BLE/esp32_gap_func.h"
+#include "BLE/esp32_gatts_func.h"
 #endif
 
+#if ESP_IDF_VERSION_MAJOR>=5
+#include "esp_flash.h"
+#include "spi_flash_mmap.h"
+#else
 #include "esp_spi_flash.h"
+#endif
 #include "esp_partition.h"
 #include "esp_log.h"
 
@@ -33,6 +39,16 @@
 
 extern void *espruino_stackHighPtr;  //Name spaced because this has to be a global variable.
                                      //Used in jsuGetFreeStack().
+#ifdef CONFIG_IDF_TARGET_ESP32C3
+#include "hal/usb_serial_jtag_ll.h"
+volatile bool usbUARTIsNotFlushed;
+#endif
+
+void esp32USBUARTWasUsed() {
+#ifdef CONFIG_IDF_TARGET_ESP32C3
+  usbUARTIsNotFlushed = true;
+#endif
+}
 
 extern void initialise_wifi(void);
 
@@ -41,18 +57,23 @@ static void uartTask(void *data) {
   while(1) {
     consoleToEspruino();
     serialToEspruino();
+#ifdef CONFIG_IDF_TARGET_ESP32C3
+    /* The USB CDC UART on the C3 only writes the data to USB after a newline.
+    We don't want that, so we call flush in this uart task if any data has been sent. */
+    if (usbUARTIsNotFlushed) {
+      usb_serial_jtag_ll_txfifo_flush();
+      usbUARTIsNotFlushed = false;
+    }
+#endif
   }
 }
 
 static void espruinoTask(void *data) {
   int heapVars;
 
-#ifdef ESP32
-    espruino_stackHighPtr = &heapVars;  //Ignore the name, 'heapVars' is on the stack!
-                          //I didn't use another variable becaue this function never ends so
-                          //all variables declared here consume stack space that is never freed. 
-#endif
-
+  espruino_stackHighPtr = &heapVars;  //Ignore the name, 'heapVars' is on the stack!
+                        //I didn't use another variable becaue this function never ends so
+                        //all variables declared here consume stack space that is never freed.
 
   PWMInit();
   RMTInit();
@@ -60,19 +81,34 @@ static void espruinoTask(void *data) {
   initADC(1);
   jshInit();     // Initialize the hardware
   jswHWInit();
-  heapVars = (esp_get_free_heap_size() - 40000) / 16;  //calculate space for jsVars
-  heapVars = heapVars - heapVars % 100; //round to 100
-  if(heapVars > 20000) heapVars = 20000;  //WROVER boards have much more RAM, so we set a limit
+
+
+  heapVars = (esp_get_free_heap_size() - 40000) / sizeof(JsVar);  //calculate space for jsVars
+
+  //Limit number of JsVars to maximum addressable. Can otherwise be
+  //breached by builds with modules removed or boards using PSRAM.
+  {
+    int maxVars = (1 << JSVARREF_BITS) - 1;
+
+    if (heapVars > maxVars) {
+      heapVars = maxVars;
+    }
+  }
+
   jsvInit(heapVars);     // Initialize the variables
+
   // not sure why this delay is needed?
   vTaskDelay(200 / portTICK_PERIOD_MS);
   jsiInit(true); // Initialize the interactive subsystem
-  if(ESP32_Get_NVS_Status(ESP_NETWORK_WIFI)) jswrap_wifi_restore();  
+  if(ESP32_Get_NVS_Status(ESP_NETWORK_WIFI)) jswrap_wifi_restore();
 #ifdef BLUETOOTH
   bluetooth_initDeviceName();
 #endif
   while(1) {
     jsiLoop();   // Perform the primary loop processing
+#ifdef BLUETOOTH
+    gatts_sendNUSNotificationIfNotEmpty();
+#endif
   }
 }
 
@@ -84,7 +120,9 @@ char* romdata_jscode=0;
  */
 int app_main(void)
 {
-  esp_log_level_set("*", ESP_LOG_ERROR); // set all components to ERROR level - suppress Wifi Info 
+  esp_log_level_set("*", ESP_LOG_VERBOSE); // set all components to ERROR level - suppress Wifi Info
+  esp_log_level_set("BT_BTM", ESP_LOG_NONE); // Kill "BT_BTM: BTM_GetSecurityFlags false" BLE errors
+
   esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
       ESP_ERROR_CHECK(nvs_flash_erase());
@@ -93,7 +131,11 @@ int app_main(void)
 #ifdef BLUETOOTH
   jsble_init();
 #endif
+#if ESP_IDF_VERSION_MAJOR>=5
+  esp_flash_init(NULL);
+#else
   spi_flash_init();
+#endif
   timers_Init();
   timer_Init("EspruinoTimer",0,0,0);
 

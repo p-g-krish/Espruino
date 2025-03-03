@@ -223,16 +223,18 @@ void jswrap_microbit_kill() {
   ],
   "ifdef" : "MICROBIT"
 }
-**Note:** This function is only available on the [BBC micro:bit](/MicroBit) board
+**Note:** This function is only available on the [BBC micro:bit](/MicroBit)
+board
 
 Show an image on the in-built 5x5 LED screen.
 
 Image can be:
 
-* A number where each bit represents a pixel (so 25 bits). eg. `5` or `0x1FFFFFF`
-* A string, eg: `show("10001")`. Newlines are ignored, and anything that is not
+* A number where each bit represents a pixel (so 25 bits). e.g. `5` or
+  `0x1FFFFFF`
+* A string, e.g: `show("10001")`. Newlines are ignored, and anything that is not
 a space or `0` is treated as a 1.
-* An array of 4 bytes (more will be ignored), eg `show([1,2,3,0])`
+* An array of 4 bytes (more will be ignored), e.g `show([1,2,3,0])`
 
 For instance the following works for images:
 
@@ -257,7 +259,7 @@ void jswrap_microbit_show_raw(uint32_t newState) {
   if ((newState!=0) && (microbitLEDState==0)) {
     // we want to display something but we don't have an interval
     JsSysTime period = jshGetTimeFromMilliseconds(MB_LED_UPDATE_MS);
-    jstExecuteFn(jswrap_microbit_display_callback, 0, jshGetSystemTime()+period, (uint32_t)period);
+    jstExecuteFn(jswrap_microbit_display_callback, 0, period, (uint32_t)period, NULL);
     // and also set pins to outputs
     nrf_gpio_cfg_output(MB_LED_COL1);
     nrf_gpio_cfg_output(MB_LED_COL2);
@@ -307,7 +309,7 @@ void jswrap_microbit_show(JsVar *image) {
   } else if (jsvIsNumeric(image)) {
     newState = jsvGetInteger(image);
   } else {
-    jsError("Expecting a number, got %t\n", image);
+    jsError("Expecting Number, got %t\n", image);
     return;
   }
   jswrap_microbit_show_raw(newState);
@@ -330,7 +332,8 @@ JsVar *getXYZ(int x, int y, int z, JsVarFloat range) {
   "return" : ["JsVar", "An object with x, y, and z fields in it"],
   "ifdef" : "MICROBIT"
 }
-**Note:** This function is only available on the [BBC micro:bit](/MicroBit) board
+**Note:** This function is only available on the [BBC micro:bit](/MicroBit)
+board
 
 Get the current acceleration of the micro:bit from the on-board accelerometer
 
@@ -369,9 +372,11 @@ JsVar *jswrap_microbit_acceleration() {
   "return" : ["JsVar", "An object with x, y, and z fields in it"],
   "ifdef" : "MICROBIT"
 }
-**Note:** This function is only available on the [BBC micro:bit](/MicroBit) board
+**Note:** This function is only available on the [BBC micro:bit](/MicroBit)
+board
 
-Get the current compass position for the micro:bit from the on-board magnetometer
+Get the current compass position for the micro:bit from the on-board
+magnetometer
 
 **This is deprecated.** Please use `Microbit.mag` instead.
 */
@@ -414,9 +419,6 @@ int accelGestureInactiveCount = 4;
 /// how many samples must a gesture have before we notify about it?
 int accelGestureMinLength = 10;
 
-typedef struct {
-  short x,y,z;
-} Vector3;
 /// accelerometer data
 Vector3 acc;
 /// squared accelerometer magnitude
@@ -469,7 +471,7 @@ void jswrap_microbit_accelHandler() {
   accHistory[accHistoryIdx+2] = clipi8(newz>>7);
   // Push 'accel' event
   JsVar *xyz = getXYZ(newx, newy, newz, 8192);
-  JsVar *microbit = jsvObjectGetChild(execInfo.root, "Microbit", 0);
+  JsVar *microbit = jsvObjectGetChildIfExists(execInfo.root, "Microbit");
     if (microbit)
     jsiQueueObjectCallbacks(microbit, JS_EVENT_PREFIX"accel", &xyz, 1);
   jsvUnLock2(microbit, xyz);
@@ -516,7 +518,7 @@ void jswrap_microbit_accelHandler() {
       if (idx>=(int)sizeof(accHistory)) idx-=sizeof(accHistory);
     }
     jsvArrayBufferIteratorFree(&it);
-    JsVar *microbit = jsvObjectGetChild(execInfo.root, "Microbit", 0);
+    JsVar *microbit = jsvObjectGetChildIfExists(execInfo.root, "Microbit");
     if (microbit)
       jsiQueueObjectCallbacks(microbit, JS_EVENT_PREFIX"gesture", &arr, 1);
     jsvUnLock2(microbit, arr);
@@ -562,7 +564,8 @@ The micro:bit's microphone enable pin
     "class" : "Microbit",
     "ifdef" : "MICROBIT"
 }
-Class containing [micro:bit's](https://www.espruino.com/MicroBit) utility functions.
+Class containing [micro:bit's](https://www.espruino.com/MicroBit) utility
+functions.
 */
 /*JSON{
   "type" : "event",
@@ -573,7 +576,8 @@ Class containing [micro:bit's](https://www.espruino.com/MicroBit) utility functi
   ],
   "ifdef" : "MICROBIT2"
 }
-Called when the Micro:bit is moved in a deliberate fashion, and includes data on the detected gesture.
+Called when the Micro:bit is moved in a deliberate fashion, and includes data on
+the detected gesture.
  */
 /*JSON{
   "type" : "staticmethod",
@@ -602,7 +606,8 @@ Called when the Micro:bit is moved in a deliberate fashion, and includes data on
   ],
   "ifdef" : "MICROBIT2"
 }
-**Note:** This function is only available on the [BBC micro:bit](/MicroBit) board
+**Note:** This function is only available on the [BBC micro:bit](/MicroBit)
+board
 
 Write the given value to the accelerometer
 */
@@ -627,10 +632,11 @@ void jswrap_microbit_accelWr(int a, int data) {
   "generate" : "jswrap_microbit_accelOn",
   "ifdef" : "MICROBIT2"
 }
-Turn on the accelerometer, and create `Microbit.accel` and `Microbit.gesture` events.
+Turn on the accelerometer, and create `Microbit.accel` and `Microbit.gesture`
+events.
 
-**Note:** The accelerometer is currently always enabled - this code
-just responds to interrupts and reads
+**Note:** The accelerometer is currently always enabled - this code just
+responds to interrupts and reads
 */
 void jswrap_microbit_accelOn() {
   if (accel_watch) return;
@@ -647,7 +653,7 @@ void jswrap_microbit_accelOn() {
   "generate" : "jswrap_microbit_accelOff",
   "ifdef" : "MICROBIT2"
 }
-Turn off events from  the accelerometer (started with `Microbit.accelOn`)
+Turn off events from the accelerometer (started with `Microbit.accelOn`)
 */
 void jswrap_microbit_accelOff() {
   if (!accel_watch) return;

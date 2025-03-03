@@ -15,10 +15,22 @@
 cd `dirname $0`
 cd ..
 
+if [ "$#" -ne 1 ]; then
+  echo "Usage:"
+  echo "  scripts/check_size.sh firmware.bin"
+  exit 255
+fi
+
 FILE=$1
+echo "Checking size of $FILE"
+# if [[ ! -v GENDIR ]]; then 
+if [[ -z $GENDIR ]]; then
+  echo "GENDIR not set, assuming 'gen'";
+  GENDIR=gen
+fi
 
 # just a random check...
-MAXSIZE=`grep FLASH_AVAILABLE_FOR_CODE gen/platform_config.h | sed "s/[^0-9]*\([0-9][0-9]*\).*/\1/"`
+MAXSIZE=`grep FLASH_AVAILABLE_FOR_CODE $GENDIR/platform_config.h | sed "s/[^0-9]*\([0-9][0-9]*\).*/\1/"`
 
 ACTUALSIZE=$(wc -c < "$FILE")
 

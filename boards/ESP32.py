@@ -13,13 +13,45 @@
 # as various source and header files for Espruino.
 # ----------------------------------------------------------------------------------------
 
+
+
+# A Note about the 'variables' parameter on ESP32 Builds
+# ------------------------------------------------------
+#
+# For the ESP32 build, the number of JsVars is governed by two factors:
+#     * Available memory
+#     * Maximum number of JsVars for the used JsVar format
+#
+# This setting will chose the optimum JsVar format for a given number
+# of JsVars.
+
+# If you add PSRAM to your ESP32 or compile with modules removed, you
+# may wish to select a value using this table:
+#
+# Value |  Max JsVars  | Bytes per JsVar | Maximum References |
+# ------+--------------+-----------------+--------------------+
+# 4095  |         4095 |              13 |               255  |
+# 8191  |         8191 |              13 |                15  |
+# 16383 |        16383 |              14 |               255  |
+# 65535 |        65535 |              16 |               255  |
+# ------+--------------+-----------------+--------------------+
+
+# CAUTION: Chosing 8191 only allows 15 references to a variable. This
+# may be too restrictive to run some code.
+
+# Using too large a JsVar format may limit how many JsVars can fit into
+# available memory. Using too small a JsVar format will under utilise
+# available memory.
+
+
 import pinutils;
 info = {
  'name'                     : "ESP32",
  'espruino_page_link'       : 'ESP32',
  'default_console'          : "EV_SERIAL1",
  'default_console_baudrate' : "115200",
- 'variables'                : 2500, # JSVAR_MALLOC is defined below - so this can vary depending on what is initialised
+ 'variables'                : 16383, # See note above
+ 'io_buffer_size'           : 4096, # How big is the input buffer (in bytes). Default on nRF52 is 1024
  'binary_name'              : 'espruino_%v_esp32.bin',
  'build' : {
    'optimizeflags' : '-Og',
@@ -33,7 +65,7 @@ info = {
      'NEOPIXEL',
      'FILESYSTEM',
      'FLASHFS',
-     'BLUETOOTH'	 
+     'BLUETOOTH'
    ],
    'makefile' : [
      'DEFINES+=-DESP_PLATFORM -DESP32=1',
@@ -65,6 +97,8 @@ chip = {
   },
 };
 devices = {
+  'LED1' : { 'pin' : 'D2' },
+  'BTN1' : { 'pin' : 'D0' }
 };
 
 # left-right, or top-bottom order
@@ -136,25 +170,38 @@ def get_pins():
   pinutils.findpin(pins, "PD35", True)["functions"]["ADC1_IN7"]=0;
 
 #ADC2 not supported yet, waiting for driver from espressif
-  pinutils.findpin(pins, "PD4", True)["functions"]["ADC2_IN0"]=0;
-  pinutils.findpin(pins, "PD0", True)["functions"]["ADC2_IN1"]=0;
-  pinutils.findpin(pins, "PD2", True)["functions"]["ADC2_IN2"]=0;
-  pinutils.findpin(pins, "PD15", True)["functions"]["ADC2_IN3"]=0;
-  pinutils.findpin(pins, "PD13", True)["functions"]["ADC2_IN4"]=0;
-  pinutils.findpin(pins, "PD12", True)["functions"]["ADC2_IN5"]=0;
-  pinutils.findpin(pins, "PD14", True)["functions"]["ADC2_IN6"]=0;
-  pinutils.findpin(pins, "PD27", True)["functions"]["ADC2_IN7"]=0;
+#  pinutils.findpin(pins, "PD4", True)["functions"]["ADC2_IN0"]=0;
+#  pinutils.findpin(pins, "PD0", True)["functions"]["ADC2_IN1"]=0;
+#  pinutils.findpin(pins, "PD2", True)["functions"]["ADC2_IN2"]=0;
+#  pinutils.findpin(pins, "PD15", True)["functions"]["ADC2_IN3"]=0;
+#  pinutils.findpin(pins, "PD13", True)["functions"]["ADC2_IN4"]=0;
+#  pinutils.findpin(pins, "PD12", True)["functions"]["ADC2_IN5"]=0;
+#  pinutils.findpin(pins, "PD14", True)["functions"]["ADC2_IN6"]=0;
+#  pinutils.findpin(pins, "PD27", True)["functions"]["ADC2_IN7"]=0;
 
   pinutils.findpin(pins, "PD25", True)["functions"]["DAC_OUT1"]=0;
-
   pinutils.findpin(pins, "PD26", True)["functions"]["DAC_OUT2"]=0;
 
-  pinutils.findpin(pins, "PD0", True)["functions"]["LED_1"]=0;
+  pinutils.findpin(pins, "PD0", True)["functions"]["NEGATED"]=0; # BTN1 negate
 
-  pinutils.findpin(pins, "PD10", True)["functions"]["USART0_TX"]=0;
-  pinutils.findpin(pins, "PD16", True)["functions"]["USART2_RX"]=0;
-  pinutils.findpin(pins, "PD17", True)["functions"]["USART2_TX"]=0;
-  pinutils.findpin(pins, "PD32", True)["functions"]["USART0_RX"]=0;
+  pinutils.findpin(pins, "PD10", True)["functions"]["USART1_TX"]=0; # doesn't match jshardwareUart?
+  pinutils.findpin(pins, "PD32", True)["functions"]["USART1_RX"]=0; # doesn't match jshardwareUart?
+  pinutils.findpin(pins, "PD16", True)["functions"]["USART3_RX"]=0;
+  pinutils.findpin(pins, "PD17", True)["functions"]["USART3_TX"]=0;
+
+  pinutils.findpin(pins, "PD16", True)["functions"]["I2C2_SCL"]=1;  # added for issue #2589 fix
+  pinutils.findpin(pins, "PD17", True)["functions"]["I2C2_SDA"]=1;  # added for issue #2589 fix
+  pinutils.findpin(pins, "PD22", True)["functions"]["I2C1_SCL"]=0; # SCL moved from P21 for issue #2589
+  pinutils.findpin(pins, "PD21", True)["functions"]["I2C1_SDA"]=0; # SDA moved from P22 for issue #2589
+
+# These SPI Pin defs used in jshSPISetup as of issue #2601
+# see esp-idf-4 /components/soc/esp32/include/soc/spi_pins.h
+  pinutils.findpin(pins, "PD14", True)["functions"]["SPI1_SCK"]=0;
+  pinutils.findpin(pins, "PD12", True)["functions"]["SPI1_MISO"]=0;
+  pinutils.findpin(pins, "PD13", True)["functions"]["SPI1_MOSI"]=0;
+  pinutils.findpin(pins, "PD18", True)["functions"]["SPI2_SCK"]=0;
+  pinutils.findpin(pins, "PD19", True)["functions"]["SPI2_MISO"]=0;
+  pinutils.findpin(pins, "PD23", True)["functions"]["SPI2_MOSI"]=0;
 
   # everything is non-5v tolerant
   #for pin in pins:

@@ -16,19 +16,20 @@
 
 #include "platform_config.h"
 
+#ifndef ESPR_EMBED
+#include "jstypes.h"
 #include <stddef.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdarg.h> // for va_args
-#include <stdint.h>
 #include <stdbool.h>
-
 #include <math.h>
+#endif
 
 #ifndef BUILDNUMBER
-#define JS_VERSION "2v12"
+#define JS_VERSION "2v25"
 #else
-#define JS_VERSION "2v12." BUILDNUMBER
+#define JS_VERSION "2v25." BUILDNUMBER
 #endif
 /*
   In code:
@@ -39,10 +40,29 @@
 
 #ifdef SAVE_ON_FLASH
 #define SAVE_ON_FLASH_MATH 1
-#ifndef BLUETOOTH
-#define NO_DATAVIEW
+#define ESPR_NO_OBJECT_METHODS 1
+#define ESPR_NO_PROPERTY_SHORTHAND 1
+#define ESPR_NO_GET_SET 1
+#define ESPR_NO_LINE_NUMBERS 1
+#define ESPR_NO_LET_SCOPING 1
+#ifndef ESPR_NO_PROMISES
+  #define ESPR_NO_PROMISES 1
 #endif
+#define ESPR_NO_CLASSES 1
+#define ESPR_NO_ARROW_FN 1
+#define ESPR_NO_REGEX 1
+#define ESPR_NO_PRETOKENISE 1
+#define ESPR_NO_TEMPLATE_LITERAL 1
+#define ESPR_NO_SOFTWARE_SERIAL 1
+#ifndef ESPR_NO_SOFTWARE_I2C
+  #define ESPR_NO_SOFTWARE_I2C 1
 #endif
+#define ESPR_NO_REGEX_OPTIMISE 1
+#define ESPR_NO_PASSWORD 1
+#endif // SAVE_ON_FLASH
+#ifdef SAVE_ON_FLASH_EXTREME
+#define ESPR_NO_BLUETOOTH_MESSAGES 1
+#endif // SAVE_ON_FLASH_EXTREME
 
 #ifndef alloca
 #define alloca(x) __builtin_alloca(x)
@@ -131,8 +151,8 @@ typedef uint32_t JsfWord;
 #endif
 #endif
 
-#define STRINGIFY_HELPER(x) #x
-#define STRINGIFY(x) STRINGIFY_HELPER(x)
+#define ESPR_STRINGIFY_HELPER(x) #x
+#define ESPR_STRINGIFY(x) ESPR_STRINGIFY_HELPER(x)
 #define NOT_USED(x) ( (void)(x) )
 
 #if !defined(__USB_TYPE_H) && !defined(CPLUSPLUS) && !defined(__cplusplus) // it is defined in this file too!
@@ -176,6 +196,8 @@ See comments after JsVar in jsvar.c for more info.
   typedef int32_t JsVarRefSigned;
   #define JSVARREF_BITS 32
   #define JSVARREFCOUNT_BITS 8
+  #define JSVARREF_MIN (-2147483648)
+  #define JSVARREF_MAX (2147483647)
 #else
    /** JsVarRaf stores References for variables - We treat 0 as null
    *  NOTE: we store JSVAR_DATA_STRING_* as actual values so we can do #if on them below
@@ -219,6 +241,11 @@ See comments after JsVar in jsvar.c for more info.
     #define JSVARREFCOUNT_BITS 4 // 56 - 13*4
     typedef uint16_t JsVarRef;
     typedef int16_t JsVarRefSigned;
+  #elif JSVAR_CACHE_SIZE <= 16383 // 14 bytes
+    #define JSVARREF_BITS 14
+    #define JSVARREFCOUNT_BITS 8 // 64 - 13*4
+    typedef uint16_t JsVarRef;
+    typedef int16_t JsVarRefSigned;
   #elif JSVAR_CACHE_SIZE <= 65535 // 16 bytes
     #define JSVARREF_BITS 16
     #define JSVARREFCOUNT_BITS 8
@@ -227,14 +254,15 @@ See comments after JsVar in jsvar.c for more info.
   #else
     #error "Assuming 16 bit refs we can't go above 65534 elements"
   #endif
+  #define JSVARREF_MIN (-(1<<(JSVARREF_BITS-1)))
+  #define JSVARREF_MAX ((1<<(JSVARREF_BITS-1))-1)
 #endif
 
 #ifndef JSVARREFCOUNT_PACK_BITS
 #define JSVARREFCOUNT_PACK_BITS 0
 #endif
 
-#define JSVARREF_MIN (-(1<<(JSVARREF_BITS-1)))
-#define JSVARREF_MAX ((1<<(JSVARREF_BITS-1))-1)
+
 #define JSVARREFCOUNT_MAX ((1<<JSVARREFCOUNT_BITS)-1)
 
 #if defined(__WORDSIZE) && __WORDSIZE == 64
@@ -245,10 +273,17 @@ See comments after JsVar in jsvar.c for more info.
 /// Max length of JSV_NAME_ strings
 #define JSVAR_DATA_STRING_NAME_LEN  4
 #endif
+/// these should be the same, but if we use sizeof in the #defines below they won't be constant
+#define JSVAR_DATA_STRING_NAME_LEN_  sizeof(size_t)
 
 
 /// Max length for a JSV_STRING, JsVar.varData.ref.refs (see comments under JsVar decl in jsvar.h)
 #define JSVAR_DATA_STRING_LEN (JSVAR_DATA_STRING_NAME_LEN + ((JSVARREF_BITS*3 + JSVARREFCOUNT_PACK_BITS)>>3))
+/// Max length for an arraybuffer or native function since it uses firstChild
+#define JSVAR_DATA_ARRAYBUFFER_LEN (JSVAR_DATA_STRING_NAME_LEN + ((JSVARREF_BITS*2)>>3))
+#define JSVAR_DATA_NATIVE_LEN JSVAR_DATA_ARRAYBUFFER_LEN
+/// Max length for JsVarDataNativeStr since it uses refCount (but not the first 3 references)
+#define JSVAR_DATA_NATIVESTR_LEN (JSVAR_DATA_STRING_NAME_LEN + ((JSVARREF_BITS*3)>>3))
 /// Max length for a JSV_STRINGEXT, JsVar.varData.ref.lastChild (see comments under JsVar decl in jsvar.h)
 #define JSVAR_DATA_STRING_MAX_LEN (JSVAR_DATA_STRING_NAME_LEN + ((JSVARREF_BITS*3 + JSVARREFCOUNT_PACK_BITS + JSVARREFCOUNT_BITS)>>3))
 
@@ -261,27 +296,15 @@ field, but because they are bitfields we can't get pointers to them!
  * a flat string than to use a normal string... */
 #define JSV_FLAT_STRING_BREAK_EVEN (JSVAR_DATA_STRING_LEN + JSVAR_DATA_STRING_MAX_LEN)
 
+typedef uint16_t JsVarRefCounter;
 // Sanity checks
-#if JSVARREFCOUNT_BITS <= 8
-    typedef uint8_t JsVarRefCounter;
-#else
-#error "Assumed JSVARREFCOUNT_BITS was 8 or less"
-#endif
-
 #if (JSVAR_DATA_STRING_NAME_LEN + ((JSVARREF_BITS*3 + JSVARREFCOUNT_PACK_BITS)>>3)) < 8
 #pragma message "required length (bits) : 64"
-#pragma message "initial data block length (bits) : " STRINGIFY(JSVAR_DATA_STRING_NAME_LEN*8)
-#pragma message "3x refs plus packing (bits) : " STRINGIFY(JSVARREF_BITS*3 + JSVARREFCOUNT_PACK_BITS)
+#pragma message "initial data block length (bits) : " ESPR_STRINGIFY(JSVAR_DATA_STRING_NAME_LEN*8)
+#pragma message "3x refs plus packing (bits) : " ESPR_STRINGIFY(JSVARREF_BITS*3 + JSVARREFCOUNT_PACK_BITS)
 #error JsVarDataRef is not big enough to store a double value
 #endif
 
-typedef int32_t JsVarInt;
-typedef uint32_t JsVarIntUnsigned;
-#ifdef USE_FLOATS
-typedef float JsVarFloat;
-#else
-typedef double JsVarFloat;
-#endif
 
 #define JSSYSTIME_MAX 0x7FFFFFFFFFFFFFFFLL
 typedef int64_t JsSysTime;
@@ -304,7 +327,7 @@ typedef int64_t JsSysTime;
 #endif
 
 // javascript specific names
-#define JSPARSE_RETURN_VAR "return" // variable name used for returning function results
+#define JSPARSE_RETURN_VAR JS_HIDDEN_CHAR_STR"rtn" // variable name used for returning function results
 #define JSPARSE_PROTOTYPE_VAR "prototype"
 #define JSPARSE_CONSTRUCTOR_VAR "constructor"
 #define JSPARSE_INHERITS_VAR "__proto__"
@@ -312,18 +335,23 @@ typedef int64_t JsSysTime;
 #define JS_HIDDEN_CHAR '\xFF' // initial character of var name determines that we shouldn't see this stuff
 #define JS_HIDDEN_CHAR_STR "\xFF"
 #define JSPARSE_FUNCTION_CODE_NAME JS_HIDDEN_CHAR_STR"cod" // the function's code!
+#define JSPARSE_FUNCTION_JIT_CODE_NAME JS_HIDDEN_CHAR_STR"jit" // the function's code for a JIT function
 #define JSPARSE_FUNCTION_SCOPE_NAME JS_HIDDEN_CHAR_STR"sco" // the scope of the function's definition
 #define JSPARSE_FUNCTION_THIS_NAME JS_HIDDEN_CHAR_STR"ths" // the 'this' variable - for bound functions
 #define JSPARSE_FUNCTION_NAME_NAME JS_HIDDEN_CHAR_STR"nam" // for named functions (a = function foo() { foo(); })
 #define JSPARSE_FUNCTION_LINENUMBER_NAME JS_HIDDEN_CHAR_STR"lin" // The line number offset of the function
 #define JS_EVENT_PREFIX "#on"
 #define JS_TIMEZONE_VAR "tz"
+#ifndef ESPR_NO_DAYLIGHT_SAVING
+#define JS_DST_SETTINGS_VAR "dst"
+#endif
 #define JS_GRAPHICS_VAR "gfx"
 
 #define JSPARSE_EXCEPTION_VAR "except" // when exceptions are thrown, they're stored in the root scope
 #define JSPARSE_STACKTRACE_VAR "sTrace" // for errors/exceptions, a stack trace is stored as a string
 #define JSPARSE_MODULE_CACHE_NAME "modules"
 
+#ifndef assert
 #if !defined(NO_ASSERT)
  #ifdef USE_FLASH_MEMORY
    // Place assert strings into flash to save RAM
@@ -340,6 +368,7 @@ typedef int64_t JsSysTime;
  #endif
 #else
  #define assert(X) do { } while(0)
+#endif
 #endif
 
 /// Used when we have enums we want to squash down
@@ -408,7 +437,23 @@ typedef int64_t JsSysTime;
   #define UNALIGNED_UINT16(addr) ((((uint16_t)*((uint8_t*)(addr)+1)) << 8) | (*(uint8_t*)(addr)))
 #else
   #define UNALIGNED_UINT16(addr) (*(uint16_t*)addr)
-#endif 
+#endif
+
+/* We define these for the lexer so we can definitely get it to inline the function call */
+static ALWAYS_INLINE bool isWhitespaceInline(char ch) {
+    return (ch==0x09) || // \t - tab
+           (ch==0x0B) || // vertical tab
+           (ch==0x0C) || // form feed
+           (ch==0x20) || // space
+           (ch=='\n') ||
+           (ch=='\r');
+}
+static ALWAYS_INLINE bool isAlphaInline(char ch) {
+    return ((ch>='a') && (ch<='z')) || ((ch>='A') && (ch<='Z')) || ch=='_';
+}
+static ALWAYS_INLINE bool isNumericInline(char ch) {
+    return (ch>='0') && (ch<='9');
+}
 
 bool isWhitespace(char ch);
 bool isNumeric(char ch);
@@ -421,10 +466,11 @@ char charToLowerCase(char ch);
 
 /** escape a character - if it is required. This may return a reference to a static array,
 so you can't store the value it returns in a variable and call it again.
-If jsonStyle=true, only string escapes supported by JSON are used */
-const char *escapeCharacter(char ch, bool jsonStyle);
+If jsonStyle=true, only string escapes supported by JSON are used. 'nextCh' is needed
+to ensure that certain escape combinations are avoided. For instance "\0" + "0" is NOT "\00" */
+const char *escapeCharacter(int ch, int nextCh, bool jsonStyle);
 /** Parse radix prefixes, or return 0 */
-int getRadix(const char **s,  bool *hasError);
+int getRadix(const char **s);
 /// Convert a character to the hexadecimal equivalent (or -1)
 int chtod(char ch);
 /// Convert 2 characters to the hexadecimal equivalent (or -1)
@@ -441,14 +487,6 @@ long long stringToInt(const char *s);
 // forward decl
 struct JsLex;
 // ------------
-typedef enum {
-  JSET_STRING,
-  JSET_ERROR,
-  JSET_SYNTAXERROR,
-  JSET_TYPEERROR,
-  JSET_INTERNALERROR,
-  JSET_REFERENCEERROR
-} JsExceptionType;
 
 void jsAssertFail(const char *file, int line, const char *expr);
 
@@ -457,15 +495,15 @@ void jsAssertFail(const char *file, int line, const char *expr);
 
 /*
 #if defined(DEBUG) || __FILE__ == DEBUG_FILE
-   #define jsDebug(dbg_type, format, ...) jsiConsolePrintf("[" __FILE__ "]:" format, ## __VA_ARGS__) 
- #else 
-   #define jsDebug(dbg_type, format, ...) do { } while(0) 
+   #define jsDebug(dbg_type, format, ...) jsiConsolePrintf("[" __FILE__ "]:" format, ## __VA_ARGS__)
+ #else
+   #define jsDebug(dbg_type, format, ...) do { } while(0)
  #endif
  */
 #if (defined DEBUG ) ||  ( defined __FILE__ == DEBUG_FILE)
-  #define jsDebug(dbg_type, format, ...) jsiConsolePrintf("[" __FILE__ "]:" format, ## __VA_ARGS__) 
-#else 
-  #define jsDebug(dbg_type, format, ...) do { } while(0) 
+  #define jsDebug(dbg_type, format, ...) jsiConsolePrintf("[" __FILE__ "]:" format, ## __VA_ARGS__)
+#else
+  #define jsDebug(dbg_type, format, ...) do { } while(0)
 #endif
 
 #ifndef USE_FLASH_MEMORY
@@ -553,8 +591,8 @@ typedef void (*vcbprintf_callback)(const char *str, void *user_data);
  * * `%s` = string (char *)
  * * `%c` = char
  * * `%v` = JsVar * (doesn't have to be a string - it'll be converted)
- * * `%q` = JsVar * (in quotes, and escaped)
- * * `%Q` = JsVar * (in quotes, and escaped the JSON subset of escape chars)
+ * * `%q` = JsVar * (in quotes, and escaped with \uXXXX,\xXX,\X whichever makes sense)
+ * * `%Q` = JsVar * (in quotes, and escaped with only \uXXXX)
  * * `%j` = Variable printed as JSON
  * * `%t` = Type of variable
  * * `%p` = Pin
@@ -585,8 +623,14 @@ char clipi8(int x);
 /// Convert the given value to a signed integer assuming it has the given number of bits
 int twosComplement(int val, unsigned char bits);
 
+/// Calculate the parity of an 8 bit number
+bool calculateParity(uint8_t v);
+
 /// quick integer square root
 unsigned short int int_sqrt32(unsigned int x);
+
+// Reverse the order of bytes in an array, in place
+void reverseBytes(char *data, int len);
 
 /** get the amount of free stack we have, in bytes */
 size_t jsuGetFreeStack();
@@ -594,5 +638,31 @@ size_t jsuGetFreeStack();
 #ifdef ESP32
   void *espruino_stackHighPtr;  //Used by jsuGetFreeStack
 #endif
+
+typedef struct {
+  short x,y,z;
+} Vector3;
+
+#ifdef ESPR_UNICODE_SUPPORT
+/// Returns true if this character denotes the start of a UTF8 sequence
+bool jsUTF8IsStartChar(char c);
+
+/// Gets the length of a unicode char sequence by looking at the first char
+unsigned int jsUTF8LengthFromChar(char c);
+
+/// Given a codepoint, figure hot how many bytes it needs for UTF8 encoding
+unsigned int jsUTF8Bytes(int codepoint);
+
+// encode a codepoint as a string, NOT null terminated (utf8 min size=4)
+unsigned int jsUTF8Encode(int codepoint, char* utf8);
+
+static ALWAYS_INLINE bool jsUnicodeIsHighSurrogate(int codepoint) {
+  return ((codepoint & 0xFC00) == 0xD800);
+}
+
+static ALWAYS_INLINE bool jsUnicodeIsLowSurrogate(int codepoint) {
+  return ((codepoint & 0xFC00) == 0xDC00);
+}
+#endif // ESPR_UNICODE_SUPPORT
 
 #endif /* JSUTILS_H_ */

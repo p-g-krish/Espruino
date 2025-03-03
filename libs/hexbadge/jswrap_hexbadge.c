@@ -178,7 +178,8 @@ Class containing utility functions for accessing IO on the hexagonal badge
 }
 Capacitive sense - the higher the capacitance, the higher the number returned.
 
-Supply a corner number between 1 and 6, and an integer value will be returned that is proportional to the capacitance
+Supply a corner number between 1 and 6, and an integer value will be returned
+that is proportional to the capacitance
 */
 int jswrap_badge_capSense(int corner) {
   if (corner>=1 && corner<=6) {
@@ -191,11 +192,14 @@ int jswrap_badge_capSense(int corner) {
     "type" : "staticmethod",
     "class" : "Badge",
     "name" : "getBatteryPercentage",
+    "deprecated" : true,
     "generate" : "jswrap_badge_getBatteryPercentage",
     "return" : ["int", "A percentage between 0 and 100" ]
 }
-Return an approximate battery percentage remaining based on
-a normal CR2032 battery (2.8 - 2.2v)
+**DEPRECATED** - Please use `E.getBattery()` instead.
+
+Return an approximate battery percentage remaining based on a normal CR2032
+battery (2.8 - 2.2v)
 */
 int jswrap_badge_getBatteryPercentage() {
   JsVarFloat v = jswrap_ble_getBattery();
@@ -217,7 +221,7 @@ void badge_lcd_wr(int data) {
 }
 
 void badge_lcd_flip(JsVar *g) {
-  JsVar *buf = jsvObjectGetChild(g,"buffer",0);
+  JsVar *buf = jsvObjectGetChildIfExists(g,"buffer");
   if (!buf) return;
   JSV_GET_AS_CHAR_ARRAY(bPtr, bLen, buf);
   if (!bPtr || bLen<128*8) return;
@@ -246,7 +250,7 @@ void badge_lcd_flip(JsVar *g) {
       ["c","float","Contrast between 0 and 1"]
     ]
 }
-Set the LCD's contrast */
+Set the LCD's contrast*/
 void jswrap_badge_setContrast(JsVarFloat c) {
   if (c<0) c=0;
   if (c>1) c=1;
@@ -277,27 +281,27 @@ void jswrap_badge_init() {
   gfx.data.type = JSGRAPHICSTYPE_ARRAYBUFFER;
   gfx.data.flags = JSGRAPHICSFLAGS_ARRAYBUFFER_VERTICAL_BYTE | JSGRAPHICSFLAGS_INVERT_X;
   gfx.graphicsVar = graphics;
-  lcdInit_ArrayBuffer(&gfx);
+  lcdInit_ArrayBuffer(&gfx, NULL);
   graphicsSetVarInitial(&gfx);
   jsvObjectSetChild(execInfo.root,"g",graphics);
   // Set initial image
   const unsigned int LCD_IMIT_IMG_OFFSET = 344;
   const unsigned char LCD_INIT_IMG[] = {
-    128, 128, 128, 128, 128, 192, 96, 176, 88, 52, 30, 14, 6, 12, 12, 12, 12, 12, 12, 12, 8, 24, 24, 24, 24, 216, 56, 
-    152, 240, 240, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 128, 128, 128, 
-    0, 0, 0, 0, 0, 128, 128, 128, 0, 0, 128, 128, 0, 0, 176, 176, 0, 0, 128, 128, 128, 0, 0, 0, 128, 128, 0, 128, 128, 0, 
-    128, 128, 0, 0, 0, 0, 128, 128, 128, 0, 128, 128, 0, 0, 0, 0, 128, 128, 128, 128, 0, 0, 0, 48, 48, 48, 48, 48, 48, 240, 
-    240, 240, 0, 0, 0, 0, 255, 129, 56, 125, 199, 255, 2, 3, 6, 6, 6, 6, 7, 7, 15, 13, 13, 13, 13, 14, 14, 30, 30, 22, 22, 
-    9, 6, 1, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 62, 127, 227, 193, 193, 
-    227, 127, 62, 0, 0, 255, 255, 3, 1, 1, 255, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 127, 192, 192, 192, 255, 127, 0, 
-    1, 1, 3, 255, 255, 0, 0, 62, 127, 227, 193, 193, 99, 255, 255, 0, 0, 114, 251, 217, 217, 205, 207, 103, 0, 0, 192, 198, 
-    198, 198, 198, 198, 255, 255, 255, 0, 0, 0, 0, 0, 1, 1, 226, 255, 255, 0, 128, 128, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
-    0, 0, 0, 0, 0, 192, 224, 248, 255, 120, 56, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
-    0, 0, 0, 0, 0, 7, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 7, 5, 7, 
+    128, 128, 128, 128, 128, 192, 96, 176, 88, 52, 30, 14, 6, 12, 12, 12, 12, 12, 12, 12, 8, 24, 24, 24, 24, 216, 56,
+    152, 240, 240, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 128, 128, 128,
+    0, 0, 0, 0, 0, 128, 128, 128, 0, 0, 128, 128, 0, 0, 176, 176, 0, 0, 128, 128, 128, 0, 0, 0, 128, 128, 0, 128, 128, 0,
+    128, 128, 0, 0, 0, 0, 128, 128, 128, 0, 128, 128, 0, 0, 0, 0, 128, 128, 128, 128, 0, 0, 0, 48, 48, 48, 48, 48, 48, 240,
+    240, 240, 0, 0, 0, 0, 255, 129, 56, 125, 199, 255, 2, 3, 6, 6, 6, 6, 7, 7, 15, 13, 13, 13, 13, 14, 14, 30, 30, 22, 22,
+    9, 6, 1, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 62, 127, 227, 193, 193,
+    227, 127, 62, 0, 0, 255, 255, 3, 1, 1, 255, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 127, 192, 192, 192, 255, 127, 0,
+    1, 1, 3, 255, 255, 0, 0, 62, 127, 227, 193, 193, 99, 255, 255, 0, 0, 114, 251, 217, 217, 205, 207, 103, 0, 0, 192, 198,
+    198, 198, 198, 198, 255, 255, 255, 0, 0, 0, 0, 0, 1, 1, 226, 255, 255, 0, 128, 128, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 192, 224, 248, 255, 120, 56, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 7, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 7, 5, 7,
     15, 11, 15, 15, 11, 15, 31, 22, 30, 30, 22, 30, 30, 8, 8, 12, 15, 11, 15, 3, 1
   };
-  JsVar *buf = jsvObjectGetChild(graphics,"buffer",0);
+  JsVar *buf = jsvObjectGetChildIfExists(graphics,"buffer");
   JSV_GET_AS_CHAR_ARRAY(bPtr, bLen, buf);
   if (bPtr) memcpy(&bPtr[LCD_IMIT_IMG_OFFSET], LCD_INIT_IMG, sizeof(LCD_INIT_IMG));
   jsvUnLock(buf);

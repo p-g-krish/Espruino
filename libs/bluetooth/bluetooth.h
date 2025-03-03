@@ -34,7 +34,7 @@
  * rebooting Espruino. */
 #define APP_ERROR_CHECK_NOT_URGENT(ERR_CODE) if (ERR_CODE) { uint32_t line = __LINE__; jsble_queue_pending_buf(BLEP_ERROR, ERR_CODE, (char*)&line, 4); }
 
-#else
+#else // !NRF5X
 typedef struct {
   uint16_t uuid;
   uint8_t type;			//see BLE_UUID_TYPE_... definitions
@@ -66,15 +66,25 @@ typedef struct {
 #define MSEC_TO_UNITS(MS,MEH) MS
 #define GATT_MTU_SIZE_DEFAULT 23
 #define BLE_NUS_MAX_DATA_LEN 20 //GATT_MTU_SIZE_DEFAULT - 3
-#endif
+#define BLE_CCCD_VALUE_LEN 2
+#define BLE_GATT_HVX_NOTIFICATION 1 // flag in CCCD
+#define BLE_GATT_HVX_INDICATION 2 // flag in CCCD
+#endif //!NRF5X (fudge NRF5X API for ESP32)
 
-#if defined(NRF52_SERIES) || defined(ESP32)
-// nRF52 gets the ability to connect to other
-#define CENTRAL_LINK_COUNT              1                                           /**<number of central links used by the application. When changing this number remember to adjust the RAM settings*/
-#define PERIPHERAL_LINK_COUNT           1                                           /**<number of peripheral links used by the application. When changing this number remember to adjust the RAM settings*/
+#ifndef CENTRAL_LINK_COUNT /**<number of central links used by the application. When changing this number remember to adjust the RAM settings*/
+#if defined(NRF52_SERIES) || defined(ESP32) // nRF52 gets the ability to connect to other devices
+#define CENTRAL_LINK_COUNT              1
 #else
 #define CENTRAL_LINK_COUNT              0                                           /**<number of central links used by the application. When changing this number remember to adjust the RAM settings*/
+#endif
+#endif
+
+#ifndef PERIPHERAL_LINK_COUNT /**<number of peripheral links used by the application. When changing this number remember to adjust the RAM settings*/
+#if defined(NRF52_SERIES) || defined(ESP32) // nRF52 gets the ability to connect to other devices
+#define PERIPHERAL_LINK_COUNT           1
+#else
 #define PERIPHERAL_LINK_COUNT           1                                           /**<number of peripheral links used by the application. When changing this number remember to adjust the RAM settings*/
+#endif
 #endif
 
 #ifndef APP_TIMER_OP_QUEUE_SIZE
@@ -109,17 +119,22 @@ typedef enum  {
   BLE_PM_INITIALISED = 1<<10,  //< Set when the Peer Manager has been initialised (only needs doing once, even after SD restart)
   BLE_IS_NOT_CONNECTABLE = 1<<11, //< Is the device connectable?
   BLE_IS_NOT_SCANNABLE = 1<<12, //< Is the device scannable? eg, scan response
-  BLE_WHITELIST_ON_BOND = 1<<13,  //< Should we write to the whitelist whenever we bond to a device?
-  BLE_DISABLE_DYNAMIC_INTERVAL = 1<<14, //< Disable automatically changing interval based on BLE peripheral activity
-  BLE_ENCRYPT_UART = 1<<15,  //< Has security with encryption been requested (if so UART must require it)
+  BLE_IS_NOT_PAIRABLE = 1<<13, //< Is the device pairable?
+  BLE_WHITELIST_ON_BOND = 1<<14,  //< Should we write to the whitelist whenever we bond to a device?
+  BLE_DISABLE_DYNAMIC_INTERVAL = 1<<15, //< Disable automatically changing interval based on BLE peripheral activity
+  BLE_ENCRYPT_UART = 1<<16,  //< Has security with encryption been requested (if so UART must require it)
+  BLE_SECURITY_MITM = 1 << 17, //< Has security with mitm protection been requested (if so UART must require it)
 #ifdef ESPR_BLUETOOTH_ANCS
-  BLE_ANCS_INITED = 1<<16,   //< Apple Notification Centre enabled
-  BLE_AMS_INITED = 1<<17,   //< Apple Media Service enabled
-  BLE_ANCS_OR_AMS_INITED = BLE_ANCS_INITED|BLE_AMS_INITED, //< Apple Notifications or Media Service enabled
+  BLE_ANCS_INITED = 1<<18,   //< Apple Notification Centre enabled
+  BLE_AMS_INITED = 1<<19,   //< Apple Media Service enabled
+  BLE_CTS_INITED = 1<<20,   //< Apple Notification Centre enabled
+  BLE_ANCS_AMS_OR_CTS_INITED = BLE_ANCS_INITED|BLE_AMS_INITED|BLE_CTS_INITED, //< Apple Notifications or Media Service enabled
 #endif
-
-  BLE_IS_ADVERTISING_MULTIPLE = 1<<18, // We have multiple different advertising packets
-  BLE_ADVERTISING_MULTIPLE_SHIFT = 19,//GET_BIT_NUMBER(BLE_ADVERTISING_MULTIPLE_ONE),
+#ifndef SAVE_ON_FLASH
+  BLE_ADVERTISE_WHEN_CONNECTED = 1<<21, // Do we keep advertising when we're connected?
+#endif
+  BLE_IS_ADVERTISING_MULTIPLE = 1<<22, // We have multiple different advertising packets
+  BLE_ADVERTISING_MULTIPLE_SHIFT = 23,//GET_BIT_NUMBER(BLE_ADVERTISING_MULTIPLE_ONE),
   BLE_ADVERTISING_MULTIPLE_ONE = 1 << BLE_ADVERTISING_MULTIPLE_SHIFT,
   BLE_ADVERTISING_MULTIPLE_MASK = 255 << BLE_ADVERTISING_MULTIPLE_SHIFT,
 
@@ -127,17 +142,29 @@ typedef enum  {
   BLE_RESET_ON_SOFTDEVICE_START = BLE_IS_SENDING|BLE_IS_SCANNING|BLE_IS_ADVERTISING
 } BLEStatus;
 
+typedef enum  {
+  BLE_BOND_REQUEST,
+  BLE_BOND_START,
+  BLE_BOND_SUCCESS,
+  BLE_BOND_FAIL
+} BLEBondingStatus;
+
 typedef enum {
   BLEP_NONE,
   BLEP_ERROR,                       //< Softdevice threw some error (code in data)
   BLEP_CONNECTED,                   //< Peripheral connected (address as buffer)
   BLEP_DISCONNECTED,                //< Peripheral disconnected
+  BLEP_ADVERTISING_START,           //< Start advertising - do it outside of IRQ because we may need to allocate JsVars
+  BLEP_ADVERTISING_STOP,            //< Stop advertising - do it outside of IRQ
+  BLEP_RESTART_SOFTDEVICE,          //< Perform a softdevice restart (again, we don't want to do this in an IRQ!)
   BLEP_RSSI_PERIPH,                 //< RSSI data from peripheral connection (rssi as data)
   BLEP_ADV_REPORT,                  //< Advertising received (as buffer)
-  BLEP_RSSI_CENTRAL,                //< RSSI data from central connection (rssi as data)
-  BLEP_TASK_FAIL_CONN_TIMEOUT,      //< Central: Connection timeout
-  BLEP_TASK_FAIL_DISCONNECTED,      //< Central: Task failed because disconnected
-  BLEP_TASK_CENTRAL_CONNECTED,      //< Central: Connected
+#if CENTRAL_LINK_COUNT>0
+  BLEP_RSSI_CENTRAL,                //< RSSI data from central connection (rssi as data low byte, index in m_central_conn_handles as high byte )
+  BLEP_TASK_FAIL,                   //< Task failed because unknown
+  BLEP_TASK_FAIL_CONN_TIMEOUT,      //< Task failed becauseConnection timeout
+  BLEP_TASK_FAIL_DISCONNECTED,      //< Task failed because disconnected
+  BLEP_TASK_CENTRAL_CONNECTED,      //< Central: Connected, (m_central_conn_handles index as data)
   BLEP_TASK_DISCOVER_SERVICE,       //< New service discovered (as buffer)
   BLEP_TASK_DISCOVER_SERVICE_COMPLETE,       //< Service discovery complete
   BLEP_TASK_DISCOVER_CHARACTERISTIC, //< New characteristic discovered (as buffer)
@@ -146,46 +173,74 @@ typedef enum {
   BLEP_TASK_CHARACTERISTIC_READ,    //< Central: Characteristic read finished (as buffer)
   BLEP_TASK_CHARACTERISTIC_WRITE,   //< Central: Characteristic write finished
   BLEP_TASK_CHARACTERISTIC_NOTIFY,  //< Central: Started requesting notifications
-  BLEP_CENTRAL_DISCONNECTED,        //< Central: Disconnected (reason as data)
-  BLEP_TASK_BONDING,                //< Bonding negotiation complete (success in data)
+  BLEP_CENTRAL_NOTIFICATION,        //< A characteristic we were watching has changed
+  BLEP_CENTRAL_DISCONNECTED,        //< Central: Disconnected (reason as data low byte, index in m_central_conn_handles as high byte )
+#endif
+#if PEER_MANAGER_ENABLED
+  BLEP_BONDING_STATUS,              //< Bonding negotiation status (data is one of BLEBondingStatus)
+#endif
+  BLEP_WRITE,                       //< One of our characteristics written by someone else
+  BLEP_TASK_PASSKEY_DISPLAY,        //< We're pairing and have been provided with a passkey to display (data = conn_handle)
+  BLEP_TASK_AUTH_KEY_REQUEST,       //< We're pairing and the device wants a passkey from us (data = conn_handle)
+  BLEP_TASK_AUTH_STATUS,            //< Data on how authentication was going has been received
+#ifdef USE_NFC
   BLEP_NFC_STATUS,                  //< NFC changed state
   BLEP_NFC_RX,                      //< NFC data received (as buffer)
   BLEP_NFC_TX,                      //< NFC data sent
+#endif
+#if BLE_HIDS_ENABLED
   BLEP_HID_SENT,                    //< A HID report has been sent
   BLEP_HID_VALUE,                   //< A HID value was received (eg caps lock)
-  BLEP_WRITE,                       //< One of our characteristics written by someone else
-  BLEP_NOTIFICATION,                //< A characteristic we were watching has changes
-  BLEP_TASK_PASSKEY_DISPLAY,        //< We're pairing and have been provided with a passkey to display
-  BLEP_TASK_AUTH_KEY_REQUEST,       //< We're pairing and the device wants a passkey from us
-  BLEP_TASK_AUTH_STATUS,            //< Data on how authentication was going has been received
+#endif
 #ifdef ESPR_BLUETOOTH_ANCS
+  BLEP_ANCS_DISCOVERED,             //< Apple ANCS discovered (need to request notifications)
   BLEP_ANCS_NOTIF,                  //< Apple Notification Centre notification received
   BLEP_ANCS_NOTIF_ATTR,             //< Apple Notification Centre notification attributes received
   BLEP_ANCS_APP_ATTR,               //< Apple Notification Centre app attributes received
+  BLEP_ANCS_ERROR,                  //< Apple Notification Centre error - cancel any active tasks
+  BLEP_AMS_DISCOVERED,              //< Apple AMS discovered (need to request notifications)
   BLEP_AMS_TRACK_UPDATE,            //< Apple Media Service Track info updated
   BLEP_AMS_PLAYER_UPDATE,           //< Apple Media Service Player info updated
-  BLEP_AMS_ATTRIBUTE                //< Apple Media Service Track or Player info read response
+  BLEP_AMS_ATTRIBUTE,               //< Apple Media Service Track or Player info read response
+  BLEP_CTS_DISCOVERED,              //< Apple Current Time Service discovered (need to request notifications)
+  BLEP_CTS_TIME                     //< Apple Current Time Service data (data = current_time_char_t + optional local_time_char_t)
 #endif
 } BLEPending;
 
 
 extern volatile BLEStatus bleStatus;
-extern uint16_t bleAdvertisingInterval;           /**< The advertising interval (in units of 0.625 ms). */
+/// Filter to use when discovering BLE Services/Characteristics
+extern ble_uuid_t bleUUIDFilter;
+
+/// The advertising interval (in units of 0.625 ms)
+extern uint16_t bleAdvertisingInterval;
+/// The interval for the current peripheral connection (in units of 1.25 ms)
+extern uint16_t blePeriphConnectionInterval;
+
 extern volatile uint16_t                         m_peripheral_conn_handle;    /**< Handle of the current connection. */
 #if CENTRAL_LINK_COUNT>0
-extern volatile uint16_t                         m_central_conn_handle; /**< Handle for central mode connection */
+extern volatile uint16_t                         m_central_conn_handles[CENTRAL_LINK_COUNT]; /**< Handle for central mode connection */
 #endif
+
+
+/// for BLEP_ADV_REPORT
+typedef struct {
+  ble_gap_addr_t            peer_addr;
+  int8_t                    rssi;                  /**< Received Signal Strength Indication in dBm of the last packet received. */
+  uint8_t        dlen;                  /**< Advertising or scan response data length. */
+  uint8_t        data[BLE_GAP_ADV_MAX_SIZE];    /**< Advertising or scan response data. */
+} BLEAdvReportData;
 
 /** Initialise the BLE stack */
 void jsble_init();
 /** Completely deinitialise the BLE stack. Return true on success */
 bool jsble_kill();
-/** Add a task to the queue to be executed (to be called mainly from IRQ-land) - with a buffer of data */
-void jsble_queue_pending_buf(BLEPending blep, uint16_t data, char *ptr, size_t len);
-/** Add a task to the queue to be executed (to be called mainly from IRQ-land) - with simple data */
-void jsble_queue_pending(BLEPending blep, uint16_t data);
-/** Execute a task that was added by jsble_queue_pending - this is done outside of IRQ land. Returns number of events handled */
-int jsble_exec_pending(IOEvent *event);
+
+/// Checks for error and reports an exception string if there was one, else 0 if no error
+JsVar *jsble_get_error_string(uint32_t err_code);
+
+/** Execute a task that was added by jsble_queue_pending - this is done outside of IRQ land. Returns number of event bytes handled */
+int jsble_exec_pending(uint8_t *data, int dataLen);
 
 /** Stop and restart the softdevice so that we can update the services in it -
  * both user-defined as well as UART/HID. If jsFunction is a function it is
@@ -194,6 +249,7 @@ void jsble_restart_softdevice(JsVar *jsFunction);
 
 uint32_t jsble_advertising_start();
 uint32_t jsble_advertising_update_advdata(char *dPtr, unsigned int dLen);
+uint32_t jsble_advertising_update_scanresponse(char *dPtr, unsigned int dLen);
 void jsble_advertising_stop();
 
 /** Is BLE connected to any device at all? */
@@ -201,6 +257,9 @@ bool jsble_has_connection();
 
 /** Is BLE connected to a central device at all? */
 bool jsble_has_central_connection();
+
+/** Return the index of the central connection in m_central_conn_handles, or -1 */
+int jsble_get_central_connection_idx(uint16_t handle);
 
 /** Is BLE connected to a server device at all (eg, the simple, 'slave' mode)? */
 bool jsble_has_peripheral_connection();
@@ -221,8 +280,8 @@ bool jsble_check_error(uint32_t err_code);
 /** Set the connection interval of the peripheral connection. Returns an error code */
 uint32_t jsble_set_periph_connection_interval(JsVarFloat min, JsVarFloat max);
 
-/// Scanning for advertising packets
-uint32_t jsble_set_scanning(bool enabled, bool activeScan);
+/// Scanning for advertising packets. options can be an object with optional {active:bool, phy:"1mbps/2mbps/coded"}
+uint32_t jsble_set_scanning(bool enabled, JsVar *options);
 
 /// returning RSSI values for current connection
 uint32_t jsble_set_rssi_scan(bool enabled);
@@ -247,6 +306,10 @@ void jsble_update_security();
 /// Return an object showing the security status of the given connection
 JsVar *jsble_get_security_status(uint16_t conn_handle);
 
+/// Set the transmit power of the current (and future) connections
+void jsble_set_tx_power(int8_t pwr);
+
+
 // ------------------------------------------------- lower-level utility fns
 
 #ifdef NRF5X
@@ -258,27 +321,39 @@ void jsble_setup_advdata(ble_advdata_t *advdata);
 
 #define TAG_HEADER_LEN            0x0A
 
-#define NDEF_HEADER "\x00\x00\x00\x00" /* |      UID/BCC      | TT = Tag Type            */ \
-                    "\x00\x00\x00\x00" /* |      UID/BCC      | ML = NDEF Message Length */ \
-                    "\x00\x00\xFF\xFF" /* | UID/BCC |   LOCK  | TF = TNF and Flags       */ \
-                    "\xE1\x11\x7C\x0F" /* |  Cap. Container   | TL = Type Legnth         */ \
-                    "\x03\x00\xC1\x01" /* | TT | ML | TF | TL | RT = Record Type         */ \
-                    "\x00\x00\x00\x00" /* |  Payload Length   | IC = URI Identifier Code */ \
-                    "\x55\x00"         /* | RT | IC | Payload |      0x00: No prepending */
+/*
+TT = Tag Type
+ML = NDEF Message Length
+RT = Record Type
+TF = TNF and Flags
+TL = Type Legnth
+IC = URI Identifier Code
+*/
 
-#define NDEF_FULL_RAW_HEADER_LEN  0x12 /* full header until ML */
-#define NDEF_FULL_URL_HEADER_LEN  0x1A /* full header until IC */
+#define NDEF_HEADER "\x00\x00\x00\x00" /* |      UID/BCC          | */ \
+                    "\x00\x00\x00\x00" /* |      UID/BCC          | */ \
+                    "\x00\x00\xFF\xFF" /* | UID/BCC |   LOCK      | */ \
+                    "\xE1\x11\x7C\x0F" /* |  Cap. Container       | */ \
+                    "\x03\x00\x00\x00" /* | TT | ML (1 or 3 bytes)| */
 
-#define NDEF_RECORD_HEADER_LEN    0x08 /* record header (TF, TL, PL, RT, IC ) */
-#define NDEF_IC_OFFSET            0x19
+#define NDEF_HEADER_LEN_SHORT      0x12 /* with 1 byte length */
+#define NDEF_HEADER_LEN_LONG       0x14 /* with 3 byte length */
+#define NDEF_HEADER_MSG_LEN_OFFSET 0x11
+
+#define NDEF_URL_RECORD_HEADER \
+                    "\xC1\x01"         /* | TF | TL         |  */ \
+                    "\x00\x00\x00\x00" /* |  Payload Length |  */ \
+                    "\x55\x00"         /* | RT | IC         | 0x00: No prepending */
+
+#define NDEF_URL_RECORD_HEADER_LEN    0x08 /* record header (TF, TL, PL, RT, IC ) */
 #define NDEF_IC_LEN               0x01
 
-#define NDEF_MSG_LEN_OFFSET       0x11
-#define NDEF_PL_LEN_LSB_OFFSET    0x17 /* we support pl < 256 */
+#define NDEF_MSG_IC_OFFSET         7
+#define NDEF_MSG_PL_LEN_MSB_OFFSET 4
 
 #define NDEF_TERM_TLV             0xfe /* last TLV block / byte */
 #define NDEF_TERM_TLV_LEN         0x01
-
+#define NDEF_TAG2_VALUE_MAXLEN (992 - 4 - NDEF_TERM_TLV_LEN) /* max NDEF data size for 0x7C size in cap. container (*8=992)*/
 void jsble_nfc_stop();
 void jsble_nfc_start(const uint8_t *data, size_t len);
 void jsble_nfc_get_internal(uint8_t *data, size_t *max_len);
@@ -296,29 +371,37 @@ void jsble_nfc_send_rsp(const uint8_t data, size_t len);
  See BluetoothRemoteGATTServer.connect docs for more docs */
 void jsble_central_connect(ble_gap_addr_t peer_addr, JsVar *options);
 /// Get primary services. Filter by UUID unless UUID is invalid, in which case return all. When done call bleCompleteTask
-void jsble_central_getPrimaryServices(ble_uuid_t uuid);
+void jsble_central_getPrimaryServices(uint16_t central_conn_handle, ble_uuid_t uuid);
 /// Get characteristics. Filter by UUID unless UUID is invalid, in which case return all. When done call bleCompleteTask
-void jsble_central_getCharacteristics(JsVar *service, ble_uuid_t uuid);
+void jsble_central_getCharacteristics(uint16_t central_conn_handle, JsVar *service, ble_uuid_t uuid);
 // Write data to the given characteristic. When done call bleCompleteTask
-void jsble_central_characteristicWrite(JsVar *characteristic, char *dataPtr, size_t dataLen);
+void jsble_central_characteristicWrite(uint16_t central_conn_handle, JsVar *characteristic, char *dataPtr, size_t dataLen);
 // Read data from the given characteristic. When done call bleCompleteTask
-void jsble_central_characteristicRead(JsVar *characteristic);
+void jsble_central_characteristicRead(uint16_t central_conn_handle, JsVar *characteristic);
 // Discover descriptors of characteristic
-void jsble_central_characteristicDescDiscover(JsVar *characteristic);
+void jsble_central_characteristicDescDiscover(uint16_t central_conn_handle, JsVar *characteristic);
 // Set whether to notify on the given characteristic. When done call bleCompleteTask
-void jsble_central_characteristicNotify(JsVar *characteristic, bool enable);
+void jsble_central_characteristicNotify(uint16_t central_conn_handle, JsVar *characteristic, bool enable);
 /// Start bonding on the current central connection
-void jsble_central_startBonding(bool forceRePair);
+void jsble_central_startBonding(uint16_t central_conn_handle, bool forceRePair);
 /// Get the security status of the current link
-JsVar *jsble_central_getSecurityStatus();
+JsVar *jsble_central_getSecurityStatus(uint16_t central_conn_handle);
 /// RSSI monitoring in central mode
-uint32_t jsble_set_central_rssi_scan(bool enabled);
+uint32_t jsble_set_central_rssi_scan(uint16_t central_conn_handle, bool enabled);
 /// Send a passkey if one was requested (passkey = 6 bytes long)
-uint32_t jsble_central_send_passkey(char *passkey);
+uint32_t jsble_central_send_passkey(uint16_t central_conn_handle, char *passkey);
 #endif
 #if PEER_MANAGER_ENABLED
 /// Set whether or not the whitelist is enabled
 void jsble_central_setWhitelist(bool whitelist);
+/// Erase any saved bonding info for peers
+void jsble_central_eraseBonds();
+/// Try to resolve a bonded peer's address from a random private resolvable address
+JsVar *jsble_resolveAddress(JsVar *address);
+#ifdef ESPR_BLE_PRIVATE_ADDRESS_SUPPORT
+JsVar *jsble_getPrivacy();
+void jsble_setPrivacy(JsVar *options);
+#endif // ESPR_BLE_PRIVATE_ADDRESS_SUPPORT
 #endif
 
 #endif // BLUETOOTH_H

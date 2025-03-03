@@ -63,11 +63,11 @@
  * and then masking off the top bit */
 unsigned char jsh7BitUART;
 bool jshIsSerial7Bit(IOEventFlags device) {
-  assert(USART_COUNT<=8);
+  assert(ESPR_USART_COUNT<=8);
   return jsh7BitUART & (1<<(device-EV_SERIAL1));
 }
 void jshSetIsSerial7Bit(IOEventFlags device, bool is7Bit) {
-  assert(USART_COUNT<=8);
+  assert(ESPR_USART_COUNT<=8);
   if (is7Bit) jsh7BitUART |= (1<<(device-EV_SERIAL1));
   else  jsh7BitUART &= ~(1<<(device-EV_SERIAL1));
 }
@@ -323,16 +323,16 @@ USART_TypeDef* getUsartFromDevice(IOEventFlags device) {
  switch (device) {
    case EV_SERIAL1 : return USART1;
    case EV_SERIAL2 : return USART2;
-#if USART_COUNT>=3
+#if ESPR_USART_COUNT>=3
    case EV_SERIAL3 : return USART3;
 #endif
-#if USART_COUNT>=4
+#if ESPR_USART_COUNT>=4
    case EV_SERIAL4 : return UART4;
 #endif
-#if USART_COUNT>=5
+#if ESPR_USART_COUNT>=5
    case EV_SERIAL5 : return UART5;
 #endif
-#if USART_COUNT>=6
+#if ESPR_USART_COUNT>=6
    case EV_SERIAL6 : return USART6;
 #endif
    default: return 0;
@@ -354,7 +354,7 @@ void *setDeviceClockCmd(JshPinFunction device, FunctionalState cmd) {
         LL_RCC_SetUSARTClockSource(LL_RCC_USART2_CLKSOURCE_PCLK1);
     } else LL_APB1_GRP1_DisableClock(LL_APB1_GRP1_PERIPH_USART2);
     ptr = USART2;
-#if defined(USART3) && USART_COUNT>=3
+#if defined(USART3) && ESPR_USART_COUNT>=3
   } else if (device == JSH_USART3) {
     if(cmd == ENABLE) {
       LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_USART3);
@@ -362,25 +362,25 @@ void *setDeviceClockCmd(JshPinFunction device, FunctionalState cmd) {
     } else LL_APB1_GRP1_DisableClock(LL_APB1_GRP1_PERIPH_USART3);
     ptr = USART3;
 #endif
-#if SPI_COUNT >= 1
+#if ESPR_SPI_COUNT >= 1
   } else if (device==JSH_SPI1) {
     if(cmd == ENABLE)  LL_APB2_GRP1_EnableClock(LL_APB2_GRP1_PERIPH_SPI1);
     else  LL_APB2_GRP1_DisableClock(LL_APB2_GRP1_PERIPH_SPI1);
     ptr = SPI1;
 #endif
-#if SPI_COUNT >= 2
+#if ESPR_SPI_COUNT >= 2
   } else if (device==JSH_SPI2) {
     if(cmd == ENABLE) LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_SPI2);
     else LL_APB1_GRP1_DisableClock(LL_APB1_GRP1_PERIPH_SPI2);
     ptr = SPI2;
 #endif
-#if SPI_COUNT >= 3
+#if ESPR_SPI_COUNT >= 3
   } else if (device==JSH_SPI3) {
     if(cmd == ENABLE) LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_SPI3);
     else LL_APB1_GRP1_DisableClock(LL_APB1_GRP1_PERIPH_SPI3);
     ptr = SPI3;
 #endif
-#if I2C_COUNT >= 1
+#if ESPR_I2C_COUNT >= 1
   } else if (device==JSH_I2C1) {
       if(cmd == ENABLE) {
         LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_I2C1);
@@ -393,7 +393,7 @@ void *setDeviceClockCmd(JshPinFunction device, FunctionalState cmd) {
       //LL_APB1_GRP1_ReleaseReset(LL_APB1_GRP1_PERIPH_I2C1);
       ptr = I2C1;
 #endif
-#if I2C_COUNT >= 2
+#if ESPR_I2C_COUNT >= 2
   } else if (device==JSH_I2C2) {
       if(cmd == ENABLE) {
         LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_I2C2);
@@ -404,7 +404,7 @@ void *setDeviceClockCmd(JshPinFunction device, FunctionalState cmd) {
       //LL_APB1_GRP1_ReleaseReset(LL_APB1_GRP1_PERIPH_I2C2);
       ptr = I2C2;
 #endif
-#if I2C_COUNT >= 3
+#if ESPR_I2C_COUNT >= 3
   } else if (device==JSH_I2C3) {
       if(cmd == ENABLE) {
         LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_I2C3);
@@ -548,7 +548,7 @@ ALWAYS_INLINE void jshPinSetState(Pin pin, JshPinState state) {
   bool out = JSHPINSTATE_IS_OUTPUT(state);
   /* bool af = JSHPINSTATE_IS_AF(state);
    * af function cannot be configured here because we do not know the af
-   * name... It should be done on the caller of jshPinSetState 
+   * name... It should be done on the caller of jshPinSetState
    * (This is due to a difference between SPL and LL libraries) */
   bool pullup = JSHPINSTATE_IS_PULLUP(state);
   bool pulldown = JSHPINSTATE_IS_PULLDOWN(state);
@@ -686,12 +686,12 @@ void jshUSARTSetup(IOEventFlags device, JshUSARTInfo *inf){
     usartIRQ = USART1_IRQn;
   } else if (device == EV_SERIAL2) {
     usartIRQ = USART2_IRQn;
-#if defined(USART3) && USART_COUNT>=3
+#if defined(USART3) && ESPR_USART_COUNT>=3
   } else if (device == EV_SERIAL3) {
     usartIRQ = USART3_IRQn;
 #endif
   } else {
-    jsExceptionHere(JSET_INTERNALERROR, "Unknown serial port device.");
+    jsExceptionHere(JSET_INTERNALERROR, "Unknown serial port device");
     return;
   }
 
@@ -715,7 +715,7 @@ void jshUSARTSetup(IOEventFlags device, JshUSARTInfo *inf){
     USART_InitStructure.DataWidth = LL_USART_DATAWIDTH_9B;
   }
   else {
-    jsExceptionHere(JSET_INTERNALERROR, "Unsupported serial byte size.");
+    jsExceptionHere(JSET_INTERNALERROR, "Unsupported serial byte size");
     return;
   }
 
@@ -726,7 +726,7 @@ void jshUSARTSetup(IOEventFlags device, JshUSARTInfo *inf){
     USART_InitStructure.StopBits = LL_USART_STOPBITS_2;
   }
   else {
-    jsExceptionHere(JSET_INTERNALERROR, "Unsupported serial stopbits length.");
+    jsExceptionHere(JSET_INTERNALERROR, "Unsupported serial stopbits length");
     return;
   } // FIXME: How do we handle 1.5 stopbits?
 
@@ -742,7 +742,7 @@ void jshUSARTSetup(IOEventFlags device, JshUSARTInfo *inf){
     USART_InitStructure.Parity = LL_USART_PARITY_EVEN;
   }
   else {
-    jsExceptionHere(JSET_INTERNALERROR, "Unsupported serial parity mode.");
+    jsExceptionHere(JSET_INTERNALERROR, "Unsupported serial parity mode");
     return;
   }
 
@@ -776,9 +776,9 @@ Pin watchedPins[16];
 
 // simple 4 byte buffers for SPI
 #define JSH_SPIBUF_MASK 7 // 8 bytes
-volatile unsigned char jshSPIBufHead[SPI_COUNT];
-volatile unsigned char jshSPIBufTail[SPI_COUNT];
-volatile unsigned char jshSPIBuf[SPI_COUNT][JSH_SPIBUF_MASK+1]; // Need to be more than SPI HW Fifo
+volatile unsigned char jshSPIBufHead[ESPR_SPI_COUNT];
+volatile unsigned char jshSPIBufTail[ESPR_SPI_COUNT];
+volatile unsigned char jshSPIBuf[ESPR_SPI_COUNT][JSH_SPIBUF_MASK+1]; // Need to be more than SPI HW Fifo
 
 /**
   * @brief  System Clock Configuration
@@ -1021,7 +1021,7 @@ void jshInit(){
   NVIC_SetPriority(UTIL_TIMER_IRQn,IRQ_PRIOR_MED);
 
   // reset SPI buffers
-  for (i=0;i<SPI_COUNT;i++) {
+  for (i=0;i<ESPR_SPI_COUNT;i++) {
     jshSPIBufHead[i] = 0;
     jshSPIBufTail[i] = 0;
   }
@@ -1059,6 +1059,9 @@ void jshIdle(){
   }
 #endif
         return;
+}
+
+void jshClearUSBIdleTimeout() {
 }
 
 /** Enter sleep mode for the given period of time. Can be woken up by interrupts.
@@ -1418,7 +1421,7 @@ JshPinFunction jshPinAnalogOutput(Pin pin, JsVarFloat value, JsVarFloat freq, Js
 
     // Otherwise
     jshPrintCapablePins(pin, "PWM Output", JSH_TIMER1, JSH_TIMERMAX, 0,0, false);
-  #if defined(DAC_COUNT) && DAC_COUNT>0
+  #if defined(ESPR_DAC_COUNT) && ESPR_DAC_COUNT>0
     jsiConsolePrint("\nOr pins with DAC output are:\n");
     jshPrintCapablePins(pin, 0, JSH_DAC, JSH_DAC, 0,0, false);
     jsiConsolePrint("\n");
@@ -1429,7 +1432,7 @@ JshPinFunction jshPinAnalogOutput(Pin pin, JsVarFloat value, JsVarFloat freq, Js
   }
 
   if (JSH_PINFUNCTION_IS_DAC(func)) {
-#if defined(DAC_COUNT) && DAC_COUNT>0
+#if defined(ESPR_DAC_COUNT) && ESPR_DAC_COUNT>0
     // Special case for DAC output
     //uint16_t data = (uint16_t)(value*0xFFF);
     uint16_t data = (uint16_t)(value*0xFFF);
@@ -1481,31 +1484,6 @@ JshPinFunction jshPinAnalogOutput(Pin pin, JsVarFloat value, JsVarFloat freq, Js
   return 0;
 }
 
-/// Pulse a pin for a certain time, but via IRQs, not JS: `digitalWrite(pin,value);setTimeout("digitalWrite(pin,!value)", time*1000);`
-void jshPinPulse(Pin pin, bool pulsePolarity, JsVarFloat pulseTime){
-  // ---- USE TIMER FOR PULSE
-  if (!jshIsPinValid(pin)) {
-       jsExceptionHere(JSET_ERROR, "Invalid pin!");
-       return;
-  }
-  if (pulseTime<=0) {
-    // just wait for everything to complete
-    jstUtilTimerWaitEmpty();
-    return;
-  } else {
-    // find out if we already had a timer scheduled
-    UtilTimerTask task;
-    if (!jstGetLastPinTimerTask(pin, &task)) {
-      // no timer - just start the pulse now!
-      jshPinOutput(pin, pulsePolarity);
-      task.time = jshGetSystemTime();
-    }
-    // Now set the end of the pulse to happen on a timer
-    jstPinOutputAtTime(task.time + jshGetTimeFromMilliseconds(pulseTime), &pin, 1, !pulsePolarity);
-  }
-
-}
-
 /// Can the given pin be watched? it may not be possible because of conflicts
 bool jshCanWatch(Pin pin){
   if (jshIsPinValid(pin)) {
@@ -1515,7 +1493,7 @@ bool jshCanWatch(Pin pin){
 }
 
 /// start watching pin - return the EXTI (IRQ number flag) associated with it
-IOEventFlags jshPinWatch(Pin pin, bool shouldWatch){
+IOEventFlags jshPinWatch(Pin pin, bool shouldWatch, JshPinWatchFlags flags) {
   if (jshIsPinValid(pin)) {
     // TODO: check for DUPs, also disable interrupt
     /*int idx = pinToPinSource(IOPIN_DATA[pin].pin);
@@ -1543,7 +1521,7 @@ IOEventFlags jshPinWatch(Pin pin, bool shouldWatch){
     LL_EXTI_Init(&s);
 
     return shouldWatch ? (EV_EXTI0+pinInfo[pin].pin)  : EV_NONE;
-  } else jsExceptionHere(JSET_ERROR, "Invalid pin!");
+  } else jsExceptionHere(JSET_ERROR, "Invalid pin");
   return EV_NONE;
 }
 
@@ -1590,8 +1568,8 @@ void jshKickWatchDog(void){
 
 
 /// Given an event, check the EXTI flags and see if it was for the given pin
-bool jshIsEventForPin(IOEvent *event, Pin pin){
-  return IOEVENTFLAGS_GETTYPE(event->flags) == pinToEVEXTI(pin);
+bool jshIsEventForPin(IOEventFlags eventFlags, Pin pin){
+  return IOEVENTFLAGS_GETTYPE(eventFlags) == pinToEVEXTI(pin);
 }
 
 
@@ -1669,7 +1647,7 @@ void jshSPISetup(IOEventFlags device, JshSPIInfo *inf){
   switch (device) {
     case EV_SPI1: spiIRQ = SPI1_IRQn; break;
     case EV_SPI2: spiIRQ = SPI2_IRQn; break;
-#if SPI_COUNT>=3
+#if ESPR_SPI_COUNT>=3
     case EV_SPI3: spiIRQ = SPI3_IRQn; break;
 #endif
     default: assert(0); break;

@@ -15,6 +15,14 @@
 #include "jshardware.h"
 #include "jsinteractive.h"
 #include "jswrapper.h"
+#include "jsflags.h"
+
+#ifdef ESPR_JIT
+#include "jsjit.h"
+#endif
+#ifndef JSVAR_CACHE_SIZE
+#define JSVAR_CACHE_SIZE 0
+#endif
 
 #define TEST_DIR "tests/"
 #define CMD_NAME "espruino"
@@ -174,11 +182,13 @@ bool run_test(const char *filename) {
 
   jshInit();
   jswHWInit();
-  jsvInit(0);
+  jsvInit(JSVAR_CACHE_SIZE);
   jsiInit(false /* do not autoload!!! */);
 
   addNativeFunction("quit", nativeQuit);
   addNativeFunction("interrupt", nativeInterrupt);
+  // reset flags
+  jsfSetFlag(JSF_PRETOKENISE, 0);
 
   jsvUnLock(jspEvaluate(buffer, false));
 
@@ -187,7 +197,7 @@ bool run_test(const char *filename) {
   while (isRunning && (jsiHasTimers() || isBusy))
     isBusy = jsiLoop();
 
-  JsVar *result = jsvObjectGetChild(execInfo.root, "result", 0 /*no create*/);
+  JsVar *result = jsvObjectGetChildIfExists(execInfo.root, "result");
   bool pass = jsvGetBool(result);
   jsvUnLock(result);
 
@@ -249,10 +259,12 @@ bool run_test_list(struct filelist *fl) {
   }
 
   filelist_foreach(fl, fn) {
-    if (run_test(fn))
-      passed++;
-    else {
-      filelist_add(&fails, fn);
+    if (!strstr(fn, "/manual/")) { // ignore anything in the 'manual' subfolder
+      if (run_test(fn))
+        passed++;
+      else {
+        filelist_add(&fails, fn);
+      }
     }
   }
 
@@ -275,6 +287,41 @@ bool run_all_tests() {
   filelist_free(&test_files);
   return rc;
 }
+
+#ifdef ESPR_JIT
+bool run_jit_tests() {
+  jshInit();
+  jswHWInit();
+  jsvInit(JSVAR_CACHE_SIZE);
+  jsiInit(false /* do not autoload!!! */);
+
+  addNativeFunction("quit", nativeQuit);
+  addNativeFunction("interrupt", nativeInterrupt);
+
+  JsVar *v = jsjEvaluate("1+2");
+  jsiConsolePrintf("RESULT : %j\n", v);
+  jsvUnLock(v);
+  bool pass = true;
+
+  warning("BEFORE: %d Memory Records Used", jsvGetMemoryUsage());
+  // jsvTrace(execInfo.root, 0);
+  jsiKill();
+  warning("AFTER: %d Memory Records Used", jsvGetMemoryUsage());
+  jsvGarbageCollect();
+  unsigned int unfreed = jsvGetMemoryUsage();
+  warning("AFTER GC: %d Memory Records Used (should be 0!)", unfreed);
+  jsvShowAllocated();
+  jsvKill();
+  jshKill();
+
+  if (unfreed) {
+    warning("FAIL because of unfreed memory.");
+    pass = false;
+  }
+
+  return pass;
+}
+#endif
 
 bool run_memory_test(const char *fn, int vars) {
   unsigned int i;
@@ -340,12 +387,13 @@ void die(const char *txt) {
 
 int handleErrors() {
   int e = 0;
+  bool hasException = (execInfo.execute & EXEC_EXCEPTION)!=0;
   JsVar *exception = jspGetException();
-  if (exception) {
+  if (hasException) {
     jsiConsolePrintf("Uncaught %v\n", exception);
-    jsvUnLock(exception);
     e = 1;
   }
+  jsvUnLock(exception);
 
   if (jspIsInterrupted()) {
     jsiConsoleRemoveInputLine();
@@ -375,9 +423,11 @@ int main(int argc, char **argv) {
         if (i + 1 >= argc)
           fatal(1, "Expecting an extra argument");
         jshInit();
-        jsvInit(0);
+        jswHWInit();
+        jsvInit(JSVAR_CACHE_SIZE);
         jsiInit(true);
         addNativeFunction("quit", nativeQuit);
+        addNativeFunction("interrupt", nativeInterrupt);
         jsvUnLock(jspEvaluate(argv[i + 1], false));
         int errCode = handleErrors();
         isRunning = !errCode;
@@ -396,7 +446,7 @@ int main(int argc, char **argv) {
       } else if (!strcmp(a, "--test")) {
         bool ok;
         if (i + 1 >= argc) {
-          fatal(1, "Expecting an extra arguments");
+          fatal(1, "Expecting extra arguments");
         } else if (i + 2 == argc) {
           ok = run_test(argv[i + 1]);
         } else {
@@ -428,6 +478,11 @@ int main(int argc, char **argv) {
           die("Expecting an extra 2 arguments\n");
         bool ok = run_memory_test(argv[i + 1], atoi(argv[i + 2]));
         exit(ok ? 0 : 1);
+#ifdef ESPR_JIT
+      } else if (!strcmp(a, "--test-jit")) {
+        bool ok = run_jit_tests();
+        exit(ok ? 0 : 1);
+#endif
       } else {
         warning("Unknown Argument %s", a);
         show_help();
@@ -455,7 +510,8 @@ int main(int argc, char **argv) {
         cmd++;
     }
     jshInit();
-    jsvInit(0);
+    jswHWInit();
+    jsvInit(JSVAR_CACHE_SIZE);
     jsiInit(false /* do not autoload!!! */);
     addNativeFunction("quit", nativeQuit);
     jsvUnLock(jspEvaluate(cmd, false));
@@ -498,7 +554,8 @@ int main(int argc, char **argv) {
 #endif //!__MINGW32__
 
   jshInit();
-  jsvInit(0);
+  jswHWInit();
+  jsvInit(JSVAR_CACHE_SIZE);
   jsiInit(true);
 
   addNativeFunction("quit", nativeQuit);

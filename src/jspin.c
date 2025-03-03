@@ -247,7 +247,7 @@ bool jshPinInput(
     value = jshPinGetValue(pin);
   }
   // Handle pin being invalid.
-  else jsExceptionHere(JSET_ERROR, "Invalid pin!");
+  else jsExceptionHere(JSET_ERROR, "Invalid pin");
   return value;
 }
 
@@ -265,7 +265,7 @@ void jshPinOutput(
       jshPinSetState(pin, JSHPINSTATE_GPIO_OUT);
   }
   // Handle pin being invalid.
-  else jsExceptionHere(JSET_ERROR, "Invalid pin!");
+  else jsExceptionHere(JSET_ERROR, "Invalid pin");
 }
 
 
@@ -273,15 +273,15 @@ void jshPinOutput(
 
 // Convert an event type flag into a jshPinFunction for an actual hardware device
 JshPinFunction jshGetPinFunctionFromDevice(IOEventFlags device) {
-#if USART_COUNT>0
+#if ESPR_USART_COUNT>0
  if (DEVICE_IS_USART(device))
    return JSH_USART1 + ((device - EV_SERIAL1)<<JSH_SHIFT_TYPE);
 #endif
-#if SPI_COUNT>0
+#if ESPR_SPI_COUNT>0
  if (DEVICE_IS_SPI(device))
    return JSH_SPI1 + ((device - EV_SPI1)<<JSH_SHIFT_TYPE);
 #endif
-#if I2C_COUNT>0
+#if ESPR_I2C_COUNT>0
  if (DEVICE_IS_I2C(device))
    return JSH_I2C1 + ((device - EV_I2C1)<<JSH_SHIFT_TYPE);
 #endif
@@ -290,15 +290,15 @@ JshPinFunction jshGetPinFunctionFromDevice(IOEventFlags device) {
 
 // Convert a jshPinFunction to an event type flag
 IOEventFlags jshGetFromDevicePinFunction(JshPinFunction func) {
-#if USART_COUNT>0
+#if ESPR_USART_COUNT>0
  if (JSH_PINFUNCTION_IS_USART(func))
    return EV_SERIAL1 + ((func - JSH_USART1) >> JSH_SHIFT_TYPE);
 #endif
-#if SPI_COUNT>0
+#if ESPR_SPI_COUNT>0
  if (JSH_PINFUNCTION_IS_SPI(func))
    return EV_SPI1 + ((func - JSH_SPI1) >> JSH_SHIFT_TYPE);
 #endif
-#if I2C_COUNT>0
+#if ESPR_I2C_COUNT>0
  if (JSH_PINFUNCTION_IS_I2C(func))
    return EV_I2C1 + ((func - JSH_I2C1) >> JSH_SHIFT_TYPE);
 #endif
@@ -471,7 +471,26 @@ JsVar *jshGetDeviceObjectFor(JshPinFunction deviceMin, JshPinFunction deviceMax,
   if (dev==JSH_NOTHING) return 0;
   char devName[16];
   jshPinFunctionToString(dev, JSPFTS_DEVICE|JSPFTS_DEVICE_NUMBER|JSPFTS_JS_NAMES, devName, sizeof(devName));
-  JsVar *devVar = jsvObjectGetChild(execInfo.root, devName, 0);
+  JsVar *devVar = jsvObjectGetChildIfExists(execInfo.root, devName);
   if (devVar) return devVar;
   return jswFindBuiltInFunction(0, devName);
+}
+
+JsVar *jshGetPinStateString(JshPinState state) {
+  JshPinState m = state&JSHPINSTATE_MASK;
+  const char *text = 0;
+  switch (m) {
+  case JSHPINSTATE_ADC_IN :             text = "analog"; break;
+  case JSHPINSTATE_GPIO_IN :            text = "input"; break;
+  case JSHPINSTATE_GPIO_IN_PULLUP :     text = "input_pullup"; break;
+  case JSHPINSTATE_GPIO_IN_PULLDOWN :   text = "input_pulldown"; break;
+  case JSHPINSTATE_GPIO_OUT :           text = "output"; break;
+  case JSHPINSTATE_GPIO_OUT_OPENDRAIN : text = "opendrain"; break;
+  case JSHPINSTATE_GPIO_OUT_OPENDRAIN_PULLUP : text = "opendrain_pullup"; break;
+  case JSHPINSTATE_AF_OUT :             text = "af_output"; break;
+  case JSHPINSTATE_AF_OUT_OPENDRAIN :   text = "af_opendrain"; break;
+  default: break;
+  }
+  if (text) return jsvNewFromString(text);
+  return 0;
 }

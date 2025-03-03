@@ -52,7 +52,7 @@ reads one character from queue, if available
 */
 void jswrap_Queue_read(JsVar *parent) {
   char data;
-  JsVar *idx = jsvObjectGetChild(parent,"index",1);
+  JsVar *idx = jsvObjectGetChildIfExists(parent,"index");
   queue_read(jsvGetInteger(idx));
   jsvUnLock(idx);
   return;
@@ -67,7 +67,7 @@ void jswrap_Queue_read(JsVar *parent) {
 Writes one character to queue
 */
 void jswrap_Queue_writeChar(JsVar *parent,char c){
-  JsVar *idx = jsvObjectGetChild(parent,"index",1);
+  JsVar *idx = jsvObjectGetChildIfExists(parent,"index");
   queue_writeChar(idx,c);
 }
 /*JSON{
@@ -117,7 +117,7 @@ JsVar *jswrap_Task_constructor(JsVar *taskName){
 Suspend task, be careful not to suspend Espruino task itself
 */
 void jswrap_Task_suspend(JsVar *parent){
-  JsVar *idx = jsvObjectGetChild(parent,"index",1);
+  JsVar *idx = jsvObjectGetChildIfExists(parent,"index");
   task_Suspend(jsvGetInteger(idx));
   return;
 }
@@ -130,7 +130,7 @@ void jswrap_Task_suspend(JsVar *parent){
 Resumes a suspended task
 */
 void jswrap_Task_resume(JsVar *parent){
-  JsVar *idx = jsvObjectGetChild(parent,"index",1);
+  JsVar *idx = jsvObjectGetChildIfExists(parent,"index");
   task_Resume(jsvGetInteger(idx));
   return;
 }
@@ -155,7 +155,7 @@ JsVar *jswrap_Task_getCurrent(JsVar *parent){
 Sends a binary notify to task
 */
 void jswrap_Task_notify(JsVar *parent){
-  JsVar *idx = jsvObjectGetChild(parent,"index",1);
+  JsVar *idx = jsvObjectGetChildIfExists(parent,"index");
   task_notify(jsvGetInteger(idx));
 }
 /*JSON{
@@ -172,8 +172,8 @@ void jswrap_Task_log(JsVar *parent) {
 }
 
 /*JSON{
-  "type"	: "class",
-  "class"	: "Timer"
+  "type"  : "class",
+  "class"  : "Timer"
 }
 A class to handle Timer on base of ESP32 Timer
 */
@@ -184,7 +184,7 @@ A class to handle Timer on base of ESP32 Timer
   "generate" : "jswrap_Timer_constructor",
   "params"   : [ ["timerName", "JsVar", "Timer Name"],
                  ["group", "int", "Timer group"],
-				 ["index", "int", "Timer index"],
+         ["index", "int", "Timer index"],
                  ["isrIndex", "int", "isr (0 = Espruino, 1 = test)"]  ],
   "return"   : ["JsVar","A Timer Object"]
 }
@@ -209,7 +209,7 @@ JsVar *jswrap_Timer_constructor(JsVar *timerName,int group, int index, int isrIn
 Starts a timer
 */
 void jswrap_Timer_start(JsVar *parent, int duration){
-  JsVar *idx = jsvObjectGetChild(parent,"index",1);
+  JsVar *idx = jsvObjectGetChildIfExists(parent,"index");
   timer_Start(jsvGetInteger(idx),duration);
 }
 /*JSON{
@@ -222,7 +222,7 @@ void jswrap_Timer_start(JsVar *parent, int duration){
 Reschedules a timer, needs to be started at least once
 */
 void jswrap_Timer_reschedule(JsVar *parent, int duration){
-  JsVar *idx = jsvObjectGetChild(parent,"index",1);
+  JsVar *idx = jsvObjectGetChildIfExists(parent,"index");
   timer_Reschedule(jsvGetInteger(idx),duration);
 }
 /*JSON{

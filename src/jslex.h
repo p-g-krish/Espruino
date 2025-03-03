@@ -32,8 +32,24 @@ typedef enum LEX_TYPES {
     LEX_UNFINISHED_REGEX, // always after LEX_REGEX
     LEX_UNFINISHED_COMMENT,
 
-_LEX_OPERATOR_START,
-    LEX_EQUAL = _LEX_OPERATOR_START,
+    // ------------------------------------------------
+    // DO NOT MODIFY THE ORDERING OF THIS LIST.
+    //
+    // The Web IDE/Bangle.js App Loader can pretokenise code
+    // which means they rely on each ID/token mapping to the
+    // correct number.
+    //
+    // Also jslReservedWordAsString needs updating to reflect
+    // any new symbols/ordering
+    //
+    // To ease adding new operators/reserved words we've
+    // now added the OPERATOR2 list below, as well as some
+    // padding before it.
+    // ------------------------------------------------
+
+_LEX_TOKENS_START,
+_LEX_OPERATOR1_START = _LEX_TOKENS_START,
+    LEX_EQUAL = _LEX_OPERATOR1_START,
     LEX_TYPEEQUAL,
     LEX_NEQUAL,
     LEX_NTYPEEQUAL,
@@ -58,7 +74,7 @@ _LEX_OPERATOR_START,
     LEX_OROR,
     LEX_XOREQUAL,
     // Note: single character operators are represented by themselves
-_LEX_OPERATOR_END = LEX_XOREQUAL,
+_LEX_OPERATOR1_END = LEX_XOREQUAL,
     LEX_ARROW_FUNCTION,
 
     // reserved words
@@ -99,8 +115,19 @@ _LEX_R_LIST_START,
     LEX_R_SUPER,
     LEX_R_STATIC,
     LEX_R_OF,
-_LEX_R_LIST_END = LEX_R_OF /* always the last entry */
+_LEX_R_LIST_END = LEX_R_OF, /* always the last entry for symbols */
+
+_LEX_OPERATOR2_START = _LEX_R_LIST_END+10, // padding for adding new symbols in the future!
+    LEX_NULLISH = _LEX_OPERATOR2_START,
+    LEX_RAW_STRING8, //< a pretokenised string stored as 0xD1,length,raw_binary_data
+    LEX_RAW_STRING16, //< a pretokenised string stored as 0xD2,length_lo,length_hi,raw_binary_data
+_LEX_OPERATOR2_END = LEX_NULLISH,
+
+_LEX_TOKENS_END = _LEX_OPERATOR2_END, /* always the last entry for symbols */
 } LEX_TYPES;
+
+// Is the supplied token an ID that is a JS reserved word
+#define LEX_IS_RESERVED_WORD(tk) (tk >= _LEX_R_LIST_START && tk <= _LEX_R_LIST_END)
 
 
 typedef struct JslCharPos {
@@ -110,6 +137,7 @@ typedef struct JslCharPos {
 
 void jslCharPosFree(JslCharPos *pos);
 void jslCharPosClone(JslCharPos *dstpos, JslCharPos *pos);
+void jslCharPosClear(JslCharPos *pos); ///< clear charpos (if was an undefined value)
 void jslCharPosFromLex(JslCharPos *dstpos);
 void jslCharPosNew(JslCharPos *dstpos, JsVar *src, size_t tokenStart);
 
@@ -125,6 +153,9 @@ typedef struct JsLex
   JsVar *tokenValue; ///< JsVar containing the current token - used only for strings/regex
   unsigned char tokenl; ///< the current length of token
   bool hadThisKeyword; ///< We need this when scanning arrow functions (to avoid storing a 'this' link if not needed)
+#ifdef ESPR_UNICODE_SUPPORT
+  bool isUTF8;         ///< Is the current String a UTF8 String?
+#endif
 
 #ifndef ESPR_NO_LINE_NUMBERS
   /** Amount we add to the line number when we're reporting to the user
@@ -162,7 +193,7 @@ void jslFunctionCharAsString(unsigned char ch, char *str, size_t len);
 void jslTokenAsString(int token, char *str, size_t len); ///< output the given token as a string - for debugging
 void jslGetTokenString(char *str, size_t len);
 char *jslGetTokenValueAsString();
-int jslGetTokenLength();
+size_t jslGetTokenLength();
 JsVar *jslGetTokenValueAsVar();
 bool jslIsIDOrReservedWord();
 
@@ -175,8 +206,10 @@ void jslGetNextToken(); ///< Get the text token from our text string
 /// Create a new STRING from part of the lexer
 JsVar *jslNewStringFromLexer(JslCharPos *charFrom, size_t charTo);
 
+#ifndef ESPR_NO_PRETOKENISE
 /// Create a new STRING from part of the lexer - keywords get tokenised
 JsVar *jslNewTokenisedStringFromLexer(JslCharPos *charFrom, size_t charTo);
+#endif
 
 /// Return the line number at the current character position (this isn't fast as it searches the string)
 unsigned int jslGetLineNumber();

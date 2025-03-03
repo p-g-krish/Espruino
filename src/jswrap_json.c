@@ -41,17 +41,19 @@ An Object that handles conversion to and from the JSON data interchange format
   "generate" : "jswrap_json_stringify",
   "params" : [
     ["data","JsVar","The data to be converted to a JSON string"],
-    ["replacer","JsVar","This value is ignored"],
-    ["space","JsVar","The number of spaces to use for padding, a string, or null/undefined for no whitespace "]
+    ["replacer","JsVar","[optional] This value is ignored"],
+    ["space","JsVar","[optional] The number of spaces to use for padding, a string, or null/undefined for no whitespace "]
   ],
   "return" : ["JsVar","A JSON string"]
 }
-Convert the given object into a JSON string which can subsequently be parsed with JSON.parse or eval.
+Convert the given object into a JSON string which can subsequently be parsed
+with JSON.parse or eval.
 
 **Note:** This differs from JavaScript's standard `JSON.stringify` in that:
 
 * The `replacer` argument is ignored
-* Typed arrays like `new Uint8Array(5)` will be dumped as if they were arrays, not as if they were objects (since it is more compact)
+* Typed arrays like `new Uint8Array(5)` will be dumped as if they were arrays,
+  not as if they were objects (since it is more compact)
  */
 JsVar *jswrap_json_stringify(JsVar *v, JsVar *replacer, JsVar *space) {
   NOT_USED(replacer);
@@ -68,8 +70,7 @@ JsVar *jswrap_json_stringify(JsVar *v, JsVar *replacer, JsVar *space) {
       whitespace[s] = 0;
       while (s) whitespace[--s]=' ';
     } else {
-      size_t l = jsvGetString(space, whitespace, sizeof(whitespace)-1);
-      whitespace[l]=0; // add trailing 0
+      jsvGetString(space, whitespace, sizeof(whitespace)-1);
     }
     if (strlen(whitespace)) flags |= JSON_ALL_NEWLINES|JSON_PRETTY;
     jsfGetJSONWhitespace(v, result, flags, whitespace);
@@ -78,7 +79,9 @@ JsVar *jswrap_json_stringify(JsVar *v, JsVar *replacer, JsVar *space) {
 }
 
 
-JsVar *jswrap_json_parse_internal() {
+/* Parse JSON from the current lexer. unquoted fields aren't normally allowed,
+   but if flags&JSON_DROP_QUOTES we'll allow them */
+JsVar *jswrap_json_parse_internal(JSONFlags flags) {
   switch (lex->tk) {
   case LEX_R_TRUE:  jslGetNextToken(); return jsvNewFromBool(true);
   case LEX_R_FALSE: jslGetNextToken(); return jsvNewFromBool(false);
@@ -86,7 +89,7 @@ JsVar *jswrap_json_parse_internal() {
   case '-': {
     jslGetNextToken();
     if (lex->tk!=LEX_INT && lex->tk!=LEX_FLOAT) return 0;
-    JsVar *v = jswrap_json_parse_internal();
+    JsVar *v = jswrap_json_parse_internal(flags);
     JsVar *zero = jsvNewFromInteger(0);
     JsVar *r = jsvMathsOp(zero, v, '-');
     jsvUnLock2(v, zero);
@@ -104,6 +107,10 @@ JsVar *jswrap_json_parse_internal() {
   }
   case LEX_STR: {
     JsVar *a = jslGetTokenValueAsVar();
+#ifdef ESPR_UNICODE_SUPPORT
+    if (lex->isUTF8)  // If the parsed string was UTF8, we should wrap it up
+      a = jsvNewUTF8StringAndUnLock(a);
+#endif
     jslGetNextToken();
     return a;
   }
@@ -111,7 +118,7 @@ JsVar *jswrap_json_parse_internal() {
     JsVar *arr = jsvNewEmptyArray(); if (!arr) return 0;
     jslGetNextToken(); // [
     while (lex->tk != ']' && !jspHasError()) {
-      JsVar *value = jswrap_json_parse_internal();
+      JsVar *value = jswrap_json_parse_internal(flags);
       if (!value ||
           (lex->tk!=']' && !jslMatch(','))) {
         jsvUnLock2(value, arr);
@@ -129,12 +136,16 @@ JsVar *jswrap_json_parse_internal() {
   case '{': {
     JsVar *obj = jsvNewObject(); if (!obj) return 0;
     jslGetNextToken(); // {
-    while (lex->tk == LEX_STR && !jspHasError()) {
+    while ((lex->tk == LEX_STR || lex->tk == LEX_INT || jslIsIDOrReservedWord()) && !jspHasError()) {
+      if (!(flags&JSON_DROP_QUOTES) && (jslIsIDOrReservedWord() || lex->tk == LEX_INT)) {
+	      jslMatch(LEX_STR);
+        return obj;
+      }
       JsVar *key = jsvAsArrayIndexAndUnLock(jslGetTokenValueAsVar());
       jslGetNextToken();
       JsVar *value = 0;
       if (!jslMatch(':') ||
-          !(value=jswrap_json_parse_internal()) ||
+          !(value=jswrap_json_parse_internal(flags)) ||
           (lex->tk!='}' && !jslMatch(','))) {
         jsvUnLock3(key, value, obj);
         return 0;
@@ -151,7 +162,7 @@ JsVar *jswrap_json_parse_internal() {
   default: {
     char buf[32];
     jslTokenAsString(lex->tk, buf, 32);
-    jsExceptionHere(JSET_SYNTAXERROR, "Expecting a valid value, got %s", buf);
+    jsExceptionHere(JSET_SYNTAXERROR, "Expecting valid value, got %s", buf);
     return 0; // undefined = error
   }
   }
@@ -168,18 +179,28 @@ JsVar *jswrap_json_parse_internal() {
   "return" : ["JsVar","The JavaScript object created by parsing the data string"]
 }
 Parse the given JSON string into a JavaScript object
-
-NOTE: This implementation uses eval() internally, and as such it is unsafe as it can allow arbitrary JS commands to be executed.
  */
-JsVar *jswrap_json_parse(JsVar *v) {
+JsVar *jswrap_json_parse_ext(JsVar *v, JSONFlags flags) {
   JsLex lex;
   JsVar *str = jsvAsString(v);
   JsLex *oldLex = jslSetLex(&lex);
   jslInit(str);
   jsvUnLock(str);
-  JsVar *res = jswrap_json_parse_internal();
+  JsVar *res = jswrap_json_parse_internal(flags);
   jslKill();
   jslSetLex(oldLex);
+  return res;
+}
+JsVar *jswrap_json_parse(JsVar *v) {
+  return jswrap_json_parse_ext(v, 0);
+}
+
+JsVar *jswrap_json_parse_liberal(JsVar *v, bool noExceptions) {
+  JsVar *res = jswrap_json_parse_ext(v, JSON_DROP_QUOTES);
+  if (noExceptions) {
+    jsvUnLock(jspGetException());
+    execInfo.execute &= (JsExecFlags)~EXEC_EXCEPTION;
+  }
   return res;
 }
 
@@ -211,9 +232,16 @@ void jsfGetJSONForFunctionWithCallback(JsVar *var, JSONFlags flags, vcbprintf_ca
   }
   jsvObjectIteratorFree(&it);
   cbprintf(user_callback, user_data, ") ");
-
+#ifdef ESPR_JIT
+  JsVar *jitCode = 0;
+#endif
   if (jsvIsNativeFunction(var)) {
     cbprintf(user_callback, user_data, "{ [native code] }");
+#ifdef ESPR_JIT
+  } else if ((jitCode = jsvFindChildFromString(var, JSPARSE_FUNCTION_JIT_CODE_NAME))) {
+    jsvUnLock(jitCode);
+    cbprintf(user_callback, user_data, "{ [JIT] }");
+#endif
   } else {
     if (codeVar) {
       if (flags & JSON_LIMIT) {
@@ -279,7 +307,7 @@ static bool jsfGetJSONForObjectItWithCallback(JsvObjectIterator *it, JSONFlags f
           if (isIDString(buf)) addQuotes=false;
         }
       }
-      cbprintf(user_callback, user_data, addQuotes?((flags&JSON_JSON_COMPATIBILE)?"%Q%s":"%q%s"):"%v%s", index, (flags&JSON_PRETTY)?": ":":");
+      cbprintf(user_callback, user_data, addQuotes?((flags&JSON_ALL_UNICODE_ESCAPE)?"%Q%s":"%q%s"):"%v%s", index, (flags&JSON_PRETTY)?": ":":");
       if (first)
         first = false;
       jsfGetJSONWithCallback(item, index, nflags, whitespace, user_callback, user_data);
@@ -296,7 +324,7 @@ void jsfGetJSONWithCallback(JsVar *var, JsVar *varName, JSONFlags flags, const c
   if (!whitespace) whitespace="  ";
 
   if (jsvIsUndefined(var)) {
-    cbprintf(user_callback, user_data, "undefined");
+    cbprintf(user_callback, user_data, (flags&JSON_NO_UNDEFINED)?"null":"undefined");
     return;
   }
   // Use IS_RECURSING flag to stop recursion
@@ -394,7 +422,7 @@ void jsfGetJSONWithCallback(JsVar *var, JsVar *varName, JSONFlags flags, const c
           if (it.index>0) cbprintf(user_callback, user_data, (flags&JSON_PRETTY)?", ":",");
           if (flags&JSON_ALL_NEWLINES) jsonNewLine(nflags, whitespace, user_callback, user_data);
           if (limited && it.index==length-JSON_LIMITED_AMOUNT) cbprintf(user_callback, user_data, JSON_LIMIT_TEXT);
-          JsVar *item = jsvArrayBufferIteratorGetValue(&it);
+          JsVar *item = jsvArrayBufferIteratorGetValue(&it, false/*little endian*/);
           jsfGetJSONWithCallback(item, NULL, nflags, whitespace, user_callback, user_data);
           jsvUnLock(item);
         }
@@ -406,15 +434,19 @@ void jsfGetJSONWithCallback(JsVar *var, JsVar *varName, JSONFlags flags, const c
       if (isBasicArrayBuffer && !asArray) cbprintf(user_callback, user_data, ".buffer");
     }
   } else if (jsvIsObject(var)) {
+#ifndef ESPR_EMBED
     IOEventFlags device = (flags & JSON_SHOW_DEVICES) ? jsiGetDeviceFromClass(var) : EV_NONE;
     if (device!=EV_NONE) {
       cbprintf(user_callback, user_data, "%s", jshGetDeviceString(device));
     } else {
+#else
+    {
+#endif
       bool showContents = true;
       if (flags & JSON_SHOW_OBJECT_NAMES) {
-        JsVar *proto = jsvObjectGetChild(var, JSPARSE_INHERITS_VAR, 0);
+        JsVar *proto = jsvObjectGetChildIfExists(var, JSPARSE_INHERITS_VAR);
         if (jsvHasChildren(proto)) {
-          JsVar *constr = jsvObjectGetChild(proto, JSPARSE_CONSTRUCTOR_VAR, 0);
+          JsVar *constr = jsvObjectGetChildIfExists(proto, JSPARSE_CONSTRUCTOR_VAR);
           if (constr) {
             JsVar *p = jsvGetIndexOf(execInfo.root, constr, true);
             if (p) cbprintf(user_callback, user_data, "%v: ", p);
@@ -464,7 +496,7 @@ void jsfGetJSONWithCallback(JsVar *var, JsVar *varName, JSONFlags flags, const c
       cbprintf(user_callback, user_data, "function ");
       jsfGetJSONForFunctionWithCallback(var, nflags, user_callback, user_data);
     }
-  } else if (jsvIsString(var) && !jsvIsName(var)) {
+  } else if ((jsvIsString(var) && !jsvIsName(var)) || ((flags&JSON_PIN_TO_STRING)&&jsvIsPin(var))) {
     if ((flags&JSON_LIMIT) && jsvGetStringLength(var)>JSON_LIMIT_STRING_AMOUNT) {
       // if the string is too big, split it and put dots in the middle
       JsVar *var1 = jsvNewFromStringVar(var, 0, JSON_LIMITED_STRING_AMOUNT);
@@ -472,9 +504,9 @@ void jsfGetJSONWithCallback(JsVar *var, JsVar *varName, JSONFlags flags, const c
       cbprintf(user_callback, user_data, "%q%s%q", var1, JSON_LIMIT_TEXT, var2);
       jsvUnLock2(var1, var2);
     } else {
-      cbprintf(user_callback, user_data, (flags&JSON_JSON_COMPATIBILE)?"%Q":"%q", var);
+      cbprintf(user_callback, user_data, (flags&JSON_ALL_UNICODE_ESCAPE)?"%Q":"%q", var);
     }
-  } else if ((flags&JSON_JSON_COMPATIBILE) && jsvIsFloat(var) && !isfinite(jsvGetFloat(var))) {
+  } else if ((flags&JSON_NO_NAN) && jsvIsFloat(var) && !isfinite(jsvGetFloat(var))) {
     cbprintf(user_callback, user_data, "null");
   } else {
     cbprintf(user_callback, user_data, "%v", var);
@@ -499,8 +531,8 @@ void jsfGetJSON(JsVar *var, JsVar *result, JSONFlags flags) {
 }
 
 void jsfPrintJSON(JsVar *var, JSONFlags flags) {
-  jsfGetJSONWithCallback(var, NULL, flags, 0, (vcbprintf_callback)jsiConsolePrintString, 0);
+  jsfGetJSONWithCallback(var, NULL, flags, 0, vcbprintf_callback_jsiConsolePrintString, 0);
 }
 void jsfPrintJSONForFunction(JsVar *var, JSONFlags flags) {
-  jsfGetJSONForFunctionWithCallback(var, flags, (vcbprintf_callback)jsiConsolePrintString, 0);
+  jsfGetJSONForFunctionWithCallback(var, flags, vcbprintf_callback_jsiConsolePrintString, 0);
 }

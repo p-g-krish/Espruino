@@ -17,14 +17,22 @@
 #include "jswrap_io.h"
 #include "jstimer.h"
 
+/* We use sortorder ensure sort position for Pin class *and at least one non-static member function*
+  is before that of 'Number', so that jswGetBasicObjectName/jswFindBuiltInFunction/jswGetSymbolListForObjectProto
+  check first (Pin is also Numeric) */
+
+
 /*JSON{
   "type"  : "class",
   "class" : "Pin",
-  "check" : "jsvIsPin(var)"
+  "name"  : "Pin",
+  "check" : "jsvIsPin(var)",
+  "sortorder" : -1
 }
 This is the built-in class for Pins, such as D0,D1,LED1, or BTN
 
-You can call the methods on Pin, or you can use Wiring-style functions such as digitalWrite
+You can call the methods on Pin, or you can use Wiring-style functions such as
+digitalWrite
 */
 
 /*JSON{
@@ -55,11 +63,13 @@ JsVar *jswrap_pin_constructor(JsVar *val) {
   "class"    : "Pin",
   "name"     : "read",
   "generate" : "jswrap_pin_read",
-  "return"   : ["bool","Whether pin is a logical 1 or 0"]
+  "return"   : ["bool","Whether pin is a logical 1 or 0"],
+  "sortorder" : -1
 }
 Returns the input state of the pin as a boolean.
 
- **Note:** if you didn't call `pinMode` beforehand then this function will also reset the pin's state to `"input"`
+ **Note:** if you didn't call `pinMode` beforehand then this function will also
+ reset the pin's state to `"input"`
 */
 bool jswrap_pin_read(JsVar *parent) {
   Pin pin = jshGetPinFromVar(parent);
@@ -70,11 +80,13 @@ bool jswrap_pin_read(JsVar *parent) {
   "type"     : "method",
   "class"    : "Pin",
   "name"     : "set",
-  "generate" : "jswrap_pin_set"
+  "generate" : "jswrap_pin_set",
+  "sortorder" : -1
 }
 Sets the output state of the pin to a 1
 
- **Note:** if you didn't call `pinMode` beforehand then this function will also reset the pin's state to `"output"`
+ **Note:** if you didn't call `pinMode` beforehand then this function will also
+ reset the pin's state to `"output"`
  */
 void jswrap_pin_set(JsVar *parent) {
   Pin pin = jshGetPinFromVar(parent);
@@ -89,7 +101,8 @@ void jswrap_pin_set(JsVar *parent) {
 }
 Sets the output state of the pin to a 0
 
- **Note:** if you didn't call `pinMode` beforehand then this function will also reset the pin's state to `"output"`
+ **Note:** if you didn't call `pinMode` beforehand then this function will also
+ reset the pin's state to `"output"`
  */
 void jswrap_pin_reset(JsVar *parent) {
   Pin pin = jshGetPinFromVar(parent);
@@ -107,7 +120,8 @@ void jswrap_pin_reset(JsVar *parent) {
 }
 Sets the output state of the pin to the parameter given
 
- **Note:** if you didn't call `pinMode` beforehand then this function will also reset the pin's state to `"output"`
+ **Note:** if you didn't call `pinMode` beforehand then this function will also
+ reset the pin's state to `"output"`
  */
 void jswrap_pin_write(
     JsVar *parent, //!< The class instance representing the Pin.
@@ -125,17 +139,18 @@ void jswrap_pin_write(
   "generate" : "jswrap_pin_writeAtTime",
   "params" : [
     ["value", "bool", "Whether to set output high (true/1) or low (false/0)"],
-    ["time", "float", "Time at which to write"]
+    ["time", "float", "Time at which to write (in seconds)"]
   ]
 }
 Sets the output state of the pin to the parameter given at the specified time.
 
- **Note:** this **doesn't** change the mode of the pin to an output. To do that, you need to use `pin.write(0)` or `pinMode(pin, 'output')` first.
+ **Note:** this **doesn't** change the mode of the pin to an output. To do that,
+ you need to use `pin.write(0)` or `pinMode(pin, 'output')` first.
  */
 void jswrap_pin_writeAtTime(JsVar *parent, bool value, JsVarFloat time) {
   Pin pin = jshGetPinFromVar(parent);
-  JsSysTime sTime = jshGetTimeFromMilliseconds(time*1000);
-  jstPinOutputAtTime(sTime, &pin, 1, value);
+  JsSysTime sTime = jshGetTimeFromMilliseconds(time*1000) - jshGetSystemTime();
+  jstPinOutputAtTime(sTime, NULL, &pin, 1, value);
 }
 
 
@@ -149,7 +164,7 @@ void jswrap_pin_writeAtTime(JsVar *parent, bool value, JsVarFloat time) {
 Return the current mode of the given pin. See `pinMode` for more information.
  */
 JsVar *jswrap_pin_getMode(JsVar *parent) {
-  return jswrap_io_getPinMode(jshGetPinFromVar(parent));  
+  return jswrap_io_getPinMode(jshGetPinFromVar(parent));
 }
 
 /*JSON{
@@ -161,7 +176,8 @@ JsVar *jswrap_pin_getMode(JsVar *parent) {
     ["mode", "JsVar", "The mode - a string that is either 'analog', 'input', 'input_pullup', 'input_pulldown', 'output', 'opendrain', 'af_output' or 'af_opendrain'. Do not include this argument if you want to revert to automatic pin mode setting."]
   ]
 }
-Set the mode of the given pin. See [`pinMode`](#l__global_pinMode) for more information on pin modes.
+Set the mode of the given pin. See [`pinMode`](#l__global_pinMode) for more
+information on pin modes.
  */
 void jswrap_pin_mode(JsVar *parent, JsVar *mode) {
   jswrap_io_pinMode(jshGetPinFromVar(parent), mode, false);
@@ -178,7 +194,8 @@ Toggles the state of the pin from off to on, or from on to off.
 
 **Note:** This method doesn't currently work on the ESP8266 port of Espruino.
 
-**Note:** if you didn't call `pinMode` beforehand then this function will also reset the pin's state to `"output"`
+**Note:** if you didn't call `pinMode` beforehand then this function will also
+reset the pin's state to `"output"`
 */
 bool jswrap_pin_toggle(JsVar *parent) {
   Pin pin = jshGetPinFromVar(parent);
@@ -188,6 +205,68 @@ bool jswrap_pin_toggle(JsVar *parent) {
   return on;
 }
 
+/*JSON{
+  "type"     : "method",
+  "class"    : "Pin",
+  "name"     : "pulse",
+  "generate" : "jswrap_pin_pulse",
+  "params" : [
+    ["value","bool","Whether to pulse high (true) or low (false)"],
+    ["time","JsVar","A time in milliseconds, or an array of times (in which case a square wave will be output starting with a pulse of 'value')"]
+  ]
+}
+(Added in 2v20) Pulse the pin with the value for the given time in milliseconds.
+
+```
+LED.pulse(1, 100); // pulse LED on for 100ms
+LED.pulse(1, [100,1000,100]); // pulse LED on for 100ms, off for 1s, on for 100ms
+```
+
+This is identical to `digitalPulse`.
+ */
+void jswrap_pin_pulse(JsVar *parent, bool value, JsVar *times) {
+  jswrap_io_digitalPulse(jshGetPinFromVar(parent), value, times);
+}
+
+/*JSON{
+  "type"     : "method",
+  "class"    : "Pin",
+  "name" : "analog",
+  "generate" : "jswrap_pin_analog",
+  "return" : ["float","The analog value of the `Pin` between 0(GND) and 1(VCC)"]
+}
+(Added in 2v20) Get the analogue value of the given pin. See `analogRead` for more information.
+ */
+JsVarFloat jswrap_pin_analog(JsVar *parent) {
+  return jshPinAnalog(jshGetPinFromVar(parent));
+}
+
+/*JSON{
+  "type"     : "method",
+  "class"    : "Pin",
+  "name" : "pwm",
+  "generate" : "jswrap_pin_pwm",
+  "params" : [
+    ["value","float","A value between 0 and 1"],
+    ["options","JsVar",["An object containing options for analog output - see below"]]
+  ]
+}
+(Added in 2v20) Set the analog Value of a pin. It will be output using PWM.
+
+See `analogWrite` for more information.
+
+Objects can contain:
+
+* `freq` - pulse frequency in Hz, e.g. ```analogWrite(A0,0.5,{ freq : 10 });``` -
+  specifying a frequency will force PWM output, even if the pin has a DAC
+* `soft` - boolean, If true software PWM is used if hardware is not available.
+* `forceSoft` - boolean, If true software PWM is used even if hardware PWM or a
+  DAC is available
+
+ */
+void jswrap_pin_pwm(JsVar *parent, JsVarFloat value, JsVar *options) {
+  jswrap_io_analogWrite(jshGetPinFromVar(parent), value, options);
+}
 
 /*JSON{
   "type"     : "method",
@@ -201,12 +280,14 @@ Get information about this pin and its capabilities. Of the form:
 
 ```
 {
-  "port"      : "A", // the Pin's port on the chip
-  "num"       : 12, // the Pin's number
-  "in_addr"   : 0x..., // (if available) the address of the pin's input address in bit-banded memory (can be used with peek)
-  "out_addr"  : 0x..., // (if available) the address of the pin's output address in bit-banded memory (can be used with poke)
-  "analog"    : { ADCs : [1], channel : 12 }, // If analog input is available
-  "functions" : {
+  "port"        : "A",    // the Pin's port on the chip
+  "num"         : 12,     // the Pin's number
+  "mode"        : (2v25+) // string: the pin's mode (same as Pin.getMode())
+  "output"      : (2v25+) // 0/1: the state of the pin's output register
+  "in_addr"     : 0x..., // (if available) the address of the pin's input address in bit-banded memory (can be used with peek)
+  "out_addr"    : 0x..., // (if available) the address of the pin's output address in bit-banded memory (can be used with poke)
+  "analog"      : { ADCs : [1], channel : 12 }, // If analog input is available
+  "functions"   : {
     "TIM1":{type:"CH1, af:0},
     "I2C3":{type:"SCL", af:1}
   }
@@ -228,6 +309,9 @@ JsVar *jswrap_pin_getInfo(
   buf[1] = 0;
   jsvObjectSetChildAndUnLock(obj, "port", jsvNewFromString(buf));
   jsvObjectSetChildAndUnLock(obj, "num", jsvNewFromInteger(inf->pin-JSH_PIN0));
+  JshPinState state = jshPinGetState(pin);
+  jsvObjectSetChildAndUnLock(obj, "mode", jshGetPinStateString(state));
+  jsvObjectSetChildAndUnLock(obj, "output", jsvNewFromInteger((state&JSHPINSTATE_PIN_IS_ON)?1:0));
 #ifdef STM32
   volatile uint32_t *addr;
   addr = jshGetPinAddress(pin, JSGPAF_INPUT);
@@ -242,12 +326,14 @@ JsVar *jswrap_pin_getInfo(
       JsVar *arr = jsvNewEmptyArray();
       if (arr) {
         int i;
-        for (i=0;i<ADC_COUNT;i++)
+        for (i=0;i<ESPR_ADC_COUNT;i++)
           if (inf->analog&(JSH_ANALOG1<<i))
             jsvArrayPushAndUnLock(arr, jsvNewFromInteger(1+i));
         jsvObjectSetChildAndUnLock(an, "ADCs", arr);
       }
-      jsvObjectSetChildAndUnLock(obj, "channel", jsvNewFromInteger(inf->analog & JSH_MASK_ANALOG_CH));
+      jsvObjectSetChildAndUnLock(an, "channel", jsvNewFromInteger(inf->analog & JSH_MASK_ANALOG_CH));
+      jsvObjectSetChildAndUnLock(obj, "channel", jsvNewFromInteger(inf->analog & JSH_MASK_ANALOG_CH)); // for backwards compatibility with 2v22 and earlier
+      jsvObjectSetChildAndUnLock(obj, "analog", an);
     }
   }
   JsVar *funcs = jsvNewObject();

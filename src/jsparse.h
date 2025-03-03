@@ -38,7 +38,7 @@ bool jspCheckStackPosition();
 JsVar *jspNewBuiltin(const char *name);
 
 /// Create a new Class of the given instance and return its prototype (as a name 'prototype')
-NO_INLINE JsVar *jspNewPrototype(const char *instanceOf);
+NO_INLINE JsVar *jspNewPrototype(const char *instanceOf, bool returnObject);
 
 /** Create a new object of the given instance and add it to root with name 'name'.
  * If name!=0, added to root with name, and the name is returned
@@ -55,7 +55,7 @@ bool jspHasError();
 void jspSetError(bool lineReported);
 /// We had an exception (argument is the exception's value)
 void jspSetException(JsVar *value);
-/** Return the reported exception if there was one (and clear it) */
+/** Return the reported exception if there was one (and clear it). May return undefined even if there was an exception - eg `throw undefined` */
 JsVar *jspGetException();
 /** Return a stack trace string if there was one (and clear it) */
 JsVar *jspGetStackTrace();
@@ -70,8 +70,9 @@ JsVar *jspEvaluateVar(JsVar *str, JsVar *scope, uint16_t lineNumberOffset);
  * the life of the interpreter, as then the interpreter will use a pointer
  * to this data, which could hang around inside the code. */
 JsVar *jspEvaluate(const char *str, bool stringIsStatic);
-/// Execute a JS function with the given arguments. usage: jspExecuteJSFunction("(function() { print('hi'); })",0,0,0)
-JsVar *jspExecuteJSFunction(const char *jsCode, JsVar *thisArg, int argCount, JsVar **argPtr);
+/**  Execute JS function code with the given arguments. usage: jspExecuteJSFunctionCode("a,b","print('hi',a,b);",0, NULL, 2,&arrayOfJsVar)
+jsCodeLen is supplied so we can reference code that contains 0  */
+JsVar *jspExecuteJSFunctionCode(const char *argNames, const char *jsCode, size_t jsCodeLen, JsVar *thisArg, int argCount, JsVar **argPtr);
 /// Execute a function with the given arguments
 JsVar *jspExecuteFunction(JsVar *func, JsVar *thisArg, int argCount, JsVar **argPtr);
 
@@ -118,6 +119,8 @@ typedef enum  {
   /** Break when a function finishes execution */
   EXEC_DEBUGGER_FINISH_FUNCTION = 32768,
   EXEC_DEBUGGER_MASK = EXEC_DEBUGGER_NEXT_LINE | EXEC_DEBUGGER_STEP_INTO | EXEC_DEBUGGER_FINISH_FUNCTION,
+#else
+  EXEC_DEBUGGER_MASK = 0,
 #endif
 
   EXEC_RUN_MASK = EXEC_YES|EXEC_BREAK|EXEC_CONTINUE|EXEC_RETURN|EXEC_INTERRUPTED|EXEC_EXCEPTION,
@@ -134,17 +137,31 @@ typedef struct {
   JsVar  *root;       //!< root of symbol table
   JsVar  *hiddenRoot; //!< root of the symbol table that's hidden
 
-  /// JsVar array of scopes
+  /// JsVar array of all execution scopes (`root` is not included)
   JsVar *scopesVar;
+#ifndef ESPR_NO_LET_SCOPING
+  /// This is the base scope of execution - `root`, or the execution scope of the function. Scopes added for let/const are not included
+  JsVar *baseScope;
+  /// IF nonzero, this the scope of the current block (which gets added when 'let/const' is used in a block)
+  JsVar *blockScope;
+  /// how many blocks '{}' deep are we?
+  uint8_t blockCount;
+#endif
   /// Value of 'this' reserved word
   JsVar *thisVar;
+#ifndef ESPR_NO_CLASSES
+  // Allows 'super' to call 'super' on the correct class on subclasses - see #1529
+  JsVar *currentClassConstructor;
+#endif
 
-  volatile JsExecFlags execute;
+  volatile JsExecFlags execute; //!< Should we be executing, do we have errors, etc
 } JsExecInfo;
 
 /* Info about execution when Parsing - this saves passing it on the stack
  * for each call */
 extern JsExecInfo execInfo;
+
+#define JSP_SHOULD_EXECUTE (((execInfo.execute)&EXEC_RUN_MASK)==EXEC_YES)
 
 /// flags for jspParseFunction
 typedef enum {
@@ -189,13 +206,6 @@ JsVar *jspGetNamedVariable(const char *tokenName);
  * a symbol rather than a variable. To handle these use jspGetVarNamedField  */
 JsVar *jspGetNamedField(JsVar *object, const char* name, bool returnName);
 JsVar *jspGetVarNamedField(JsVar *object, JsVar *nameVar, bool returnName);
-
-/** Call the function named on the given object. For example you might call:
- *
- *  JsVar *str = jspCallNamedFunction(var, "toString", 0, 0);
- */
-JsVar *jspCallNamedFunction(JsVar *object, char* name, int argCount, JsVar **argPtr);
-
 
 // These are exported for the Web IDE's compiler. See exportPtrs in jswrap_process.c
 JsVar *jspeiFindInScopes(const char *name);

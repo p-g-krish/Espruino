@@ -42,7 +42,11 @@ static JsVar *jswrap_modules_getModuleList() {
   "params" : [
     ["moduleName","JsVar","A String containing the name of the given module"]
   ],
-  "return" : ["JsVar","The result of evaluating the string"]
+  "return" : ["JsVar","The result of evaluating the string"],
+  "typescript": [
+    "declare function require<T extends keyof Libraries>(moduleName: T): Libraries[T];",
+    "declare function require<T extends Exclude<string, keyof Libraries>>(moduleName: T): any;"
+  ]
 }
 Load the given module, and return the exported functions and variables.
 
@@ -55,12 +59,12 @@ print(s.read("test"));
 // prints "hello world"
 ```
 
-Check out [the page on Modules](/Modules) for an explanation
-of what modules are and how you can use them.
+Check out [the page on Modules](/Modules) for an explanation of what modules are
+and how you can use them.
  */
 JsVar *jswrap_require(JsVar *moduleName) {
   if (!jsvIsString(moduleName)) {
-    jsExceptionHere(JSET_TYPEERROR, "Expecting a module name as a string, but got %t", moduleName);
+    jsExceptionHere(JSET_TYPEERROR, "Expecting module name as a string, got %t", moduleName);
     return 0;
   }
   char moduleNameBuf[128];
@@ -72,7 +76,7 @@ JsVar *jswrap_require(JsVar *moduleName) {
   // Search to see if we have already loaded this module
   JsVar *moduleList = jswrap_modules_getModuleList();
   if (!moduleList) return 0; // out of memory
-  JsVar *moduleExport = jsvSkipNameAndUnLock(jsvFindChildFromString(moduleList, moduleNameBuf, false));
+  JsVar *moduleExport = jsvSkipNameAndUnLock(jsvFindChildFromString(moduleList, moduleNameBuf));
   jsvUnLock(moduleList);
   if (moduleExport) {
     // Found the module!
@@ -86,6 +90,7 @@ JsVar *jswrap_require(JsVar *moduleName) {
     moduleExport = jsvNewNativeFunction(builtInLib, 0);
   }
 
+#ifndef ESPR_EMBED
 #ifndef SAVE_ON_FLASH
   // Has it been manually saved to Flash Storage? Use Storage support.
   if ((!moduleExport) && (strlen(moduleNameBuf) <= JSF_MAX_FILENAME_LENGTH)) {
@@ -97,14 +102,14 @@ JsVar *jswrap_require(JsVar *moduleName) {
     }
   }
 #endif
-
+#endif
 
   // Ok - it's not built-in as native or storage.
   // Look and see if it's compiled-in as a C-String of JS - if so get the actual text and execute it
   if (!moduleExport) {
     const char *builtInJS = jswGetBuiltInJSLibrary(moduleNameBuf);
     if (builtInJS) {
-      JsVar *fileContents = jsvNewNativeString((char*)builtInJS, strlen(builtInJS));       
+      JsVar *fileContents = jsvNewNativeString((char*)builtInJS, strlen(builtInJS));
       if (fileContents) {
         moduleExport = jspEvaluateModule(fileContents);
         jsvUnLock(fileContents);
@@ -115,7 +120,7 @@ JsVar *jswrap_require(JsVar *moduleName) {
   // If we have filesystem support, look on the filesystem
 #ifdef USE_FILESYSTEM
   if (!moduleExport) {
-    JsVar *fileContents = 0;        
+    JsVar *fileContents = 0;
     JsVar *modulePath = jsvNewFromString("node_modules/");
     if (modulePath) { // out of memory
       jsvAppendString(modulePath, moduleNameBuf);
@@ -133,8 +138,8 @@ JsVar *jswrap_require(JsVar *moduleName) {
       jsvUnLock(fileContents);
     }
   }
-#endif    
-   
+#endif
+
 
   if (moduleExport) { // Found - now save module
     JsVar *moduleList = jswrap_modules_getModuleList();
@@ -152,7 +157,7 @@ JsVar *jswrap_require(JsVar *moduleName) {
     }
 #endif
     // nope. no module
-    jsExceptionHere(JSET_ERROR, "Module %s not found", moduleNameBuf);
+    jsExceptionHere(JSET_ERROR, "Module %q not found", moduleName);
   }
 
   return moduleExport;
@@ -201,7 +206,7 @@ Remove the given module from the list of cached modules
  */
 void jswrap_modules_removeCached(JsVar *id) {
   if (!jsvIsString(id)) {
-    jsExceptionHere(JSET_ERROR, "The argument to removeCached must be a string");
+    jsExceptionHere(JSET_ERROR, "First argument must be String");
     return;
   }
   JsVar *moduleList = jswrap_modules_getModuleList();
@@ -211,8 +216,7 @@ void jswrap_modules_removeCached(JsVar *id) {
   if (!moduleExportName) {
     jsExceptionHere(JSET_ERROR, "Module %q not found", id);
   } else {
-    jsvRemoveChild(moduleList, moduleExportName);
-    jsvUnLock(moduleExportName);
+    jsvRemoveChildAndUnLock(moduleList, moduleExportName);
   }
 
   jsvUnLock(moduleList);
