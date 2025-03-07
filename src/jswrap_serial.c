@@ -17,6 +17,12 @@
 #include "jsdevices.h"
 #include "jsinteractive.h"
 #include "jsserial.h"
+#ifdef USE_TELNET
+#include "jswrap_telnet.h"
+#endif
+#ifdef BLUETOOTH
+#include "jswrap_bluetooth.h"
+#endif
 
 /*JSON{
   "type" : "class",
@@ -24,7 +30,10 @@
 }
 This class allows use of the built-in USARTs
 
-Methods may be called on the `USB`, `Serial1`, `Serial2`, `Serial3`, `Serial4`, `Serial5` and `Serial6` objects. While different processors provide different numbers of USARTs, on official Espruino boards you can always rely on at least `Serial1` being available
+Methods may be called on the `USB`, `Serial1`, `Serial2`, `Serial3`, `Serial4`,
+`Serial5` and `Serial6` objects. While different processors provide different
+numbers of USARTs, on official Espruino boards you can always rely on at least
+`Serial1` being available
  */
 /*JSON{
   "type" : "constructor",
@@ -33,7 +42,8 @@ Methods may be called on the `USB`, `Serial1`, `Serial2`, `Serial3`, `Serial4`, 
   "generate" : "jswrap_serial_constructor",
   "return" : ["JsVar","A Serial object"]
 }
-Create a software Serial port. This has limited functionality (only low baud rates), but it can work on any pins.
+Create a software Serial port. This has limited functionality (only low baud
+rates), but it can work on any pins.
 
 Use `Serial.setup` to configure this port.
  */
@@ -48,7 +58,9 @@ JsVar *jswrap_serial_constructor() {
     ["data","JsVar","A string containing one or more characters of received data"]
   ]
 }
-The `data` event is called when data is received. If a handler is defined with `X.on('data', function(data) { ... })` then it will be called, otherwise data will be stored in an internal buffer, where it can be retrieved with `X.read()`
+The `data` event is called when data is received. If a handler is defined with
+`X.on('data', function(data) { ... })` then it will be called, otherwise data
+will be stored in an internal buffer, where it can be retrieved with `X.read()`
  */
 
 /*JSON{
@@ -57,31 +69,34 @@ The `data` event is called when data is received. If a handler is defined with `
   "name" : "framing"
 }
 The `framing` event is called when there was activity on the input to the UART
-but the `STOP` bit wasn't in the correct place. This is either because there
-was noise on the line, or the line has been pulled to 0 for a long period
-of time.
+but the `STOP` bit wasn't in the correct place. This is either because there was
+noise on the line, or the line has been pulled to 0 for a long period of time.
 
-To enable this, you must initialise Serial with `SerialX.setup(..., { ..., errors:true });`
+To enable this, you must initialise Serial with `SerialX.setup(..., { ...,
+errors:true });`
 
 **Note:** Even though there was an error, the byte will still be received and
 passed to the `data` handler.
 
-**Note:** This only works on STM32 and NRF52 based devices (eg. all official Espruino boards)
+**Note:** This only works on STM32 and NRF52 based devices (e.g. all official
+Espruino boards)
  */
 /*JSON{
   "type" : "event",
   "class" : "Serial",
   "name" : "parity"
 }
-The `parity` event is called when the UART was configured with a parity bit,
-and this doesn't match the bits that have actually been received.
+The `parity` event is called when the UART was configured with a parity bit, and
+this doesn't match the bits that have actually been received.
 
-To enable this, you must initialise Serial with `SerialX.setup(..., { ..., errors:true });`
+To enable this, you must initialise Serial with `SerialX.setup(..., { ...,
+errors:true });`
 
 **Note:** Even though there was an error, the byte will still be received and
 passed to the `data` handler.
 
-**Note:** This only works on STM32 and NRF52 based devices (eg. all official Espruino boards)
+**Note:** This only works on STM32 and NRF52 based devices (e.g. all official
+Espruino boards)
  */
 // this is created in jsiIdle based on EV_SERIALx_STATUS ecents
 
@@ -89,13 +104,16 @@ passed to the `data` handler.
   "type" : "staticmethod",
   "class" : "Serial",
   "name" : "find",
+  "deprecated" : true,
+  "ifndef" : "SAVE_ON_FLASH",
   "generate_full" : "jshGetDeviceObjectFor(JSH_USART1, JSH_USARTMAX, pin)",
   "params" : [
     ["pin","pin","A pin to search with"]
   ],
   "return" : ["JsVar","An object of type `Serial`, or `undefined` if one couldn't be found."]
 }
-Try and find a USART (Serial) hardware device that will work on this pin (eg. `Serial1`)
+Try and find a USART (Serial) hardware device that will work on this pin (e.g.
+`Serial1`)
 
 May return undefined if no device can be found.
 */
@@ -113,7 +131,7 @@ The USB Serial port
   "type" : "object",
   "name" : "Serial1",
   "instanceof" : "Serial",
-  "#if" : "USART_COUNT>=1"
+  "#if" : "ESPR_USART_COUNT>=1"
 }
 The first Serial (USART) port
  */
@@ -121,7 +139,7 @@ The first Serial (USART) port
   "type" : "object",
   "name" : "Serial2",
   "instanceof" : "Serial",
-  "#if" : "USART_COUNT>=2"
+  "#if" : "ESPR_USART_COUNT>=2"
 }
 The second Serial (USART) port
  */
@@ -129,7 +147,7 @@ The second Serial (USART) port
   "type" : "object",
   "name" : "Serial3",
   "instanceof" : "Serial",
-  "#if" : "USART_COUNT>=3"
+  "#if" : "ESPR_USART_COUNT>=3"
 }
 The third Serial (USART) port
  */
@@ -137,7 +155,7 @@ The third Serial (USART) port
   "type" : "object",
   "name" : "Serial4",
   "instanceof" : "Serial",
-  "#if" : "USART_COUNT>=4"
+  "#if" : "ESPR_USART_COUNT>=4"
 }
 The fourth Serial (USART) port
  */
@@ -145,7 +163,7 @@ The fourth Serial (USART) port
   "type" : "object",
   "name" : "Serial5",
   "instanceof" : "Serial",
-  "#if" : "USART_COUNT>=5"
+  "#if" : "ESPR_USART_COUNT>=5"
 }
 The fifth Serial (USART) port
  */
@@ -153,7 +171,7 @@ The fifth Serial (USART) port
   "type" : "object",
   "name" : "Serial6",
   "instanceof" : "Serial",
-  "#if" : "USART_COUNT>=6"
+  "#if" : "ESPR_USART_COUNT>=6"
 }
 The sixth Serial (USART) port
  */
@@ -163,14 +181,16 @@ The sixth Serial (USART) port
   "name" : "LoopbackA",
   "instanceof" : "Serial"
 }
-A loopback serial device. Data sent to `LoopbackA` comes out of `LoopbackB` and vice versa
+A loopback serial device. Data sent to `LoopbackA` comes out of `LoopbackB` and
+vice versa
  */
 /*JSON{
   "type" : "object",
   "name" : "LoopbackB",
   "instanceof" : "Serial"
 }
-A loopback serial device. Data sent to `LoopbackA` comes out of `LoopbackB` and vice versa
+A loopback serial device. Data sent to `LoopbackA` comes out of `LoopbackB` and
+vice versa
  */
 /*JSON{
   "type" : "object",
@@ -178,7 +198,8 @@ A loopback serial device. Data sent to `LoopbackA` comes out of `LoopbackB` and 
   "instanceof" : "Serial",
   "#if" : "defined(USE_TELNET)"
 }
-A telnet serial device that maps to the built-in telnet console server (devices that have built-in wifi only).
+A telnet serial device that maps to the built-in telnet console server (devices
+that have built-in wifi only).
  */
 
 
@@ -194,8 +215,8 @@ A telnet serial device that maps to the built-in telnet console server (devices 
 }
 Set this Serial port as the port for the JavaScript console (REPL).
 
-Unless `force` is set to true, changes in the connection state of the board
-(for instance plugging in USB) will cause the console to change.
+Unless `force` is set to true, changes in the connection state of the board (for
+instance plugging in USB) will cause the console to change.
 
 See `E.setConsole` for a more flexible version of this function.
  */
@@ -215,12 +236,12 @@ void jswrap_serial_setConsole(JsVar *parent, bool force) {
   "generate" : "jswrap_serial_setup",
   "params" : [
     ["baudrate","JsVar","The baud rate - the default is 9600"],
-    ["options","JsVar","An optional structure containing extra information on initialising the serial port - see below."]
+    ["options","JsVar","[optional] A structure containing extra information on initialising the serial port - see below."]
   ]
 }
 Setup this Serial port with the given baud rate and options.
 
-eg.
+e.g.
 
 ```
 Serial1.setup(9600,{rx:a_pin, tx:a_pin});
@@ -235,7 +256,7 @@ The second argument can contain:
   ck:pin,                           // (default none) Clock Pin
   cts:pin,                          // (default none) Clear to Send Pin
   bytesize:8,                       // (default 8)How many data bits - 7 or 8
-  parity:null/'none'/'o'/'odd'/'e'/'even', 
+  parity:null/'none'/'o'/'odd'/'e'/'even',
                                     // (default none) Parity bit
   stopbits:1,                       // (default 1) Number of stop bits to use
   flow:null/undefined/'none'/'xon', // (default none) software flow control
@@ -244,31 +265,31 @@ The second argument can contain:
 }
 ```
 
-You can find out which pins to use by looking at [your board's reference page](#boards) 
-and searching for pins with the `UART`/`USART` markers.
+You can find out which pins to use by looking at [your board's reference
+page](#boards) and searching for pins with the `UART`/`USART` markers.
 
-If not specified in options, the default pins are used for rx and tx
-(usually the lowest numbered pins on the lowest port that supports 
-this peripheral). `ck` and `cts` are not used unless specified.
+If not specified in options, the default pins are used for rx and tx (usually
+the lowest numbered pins on the lowest port that supports this peripheral). `ck`
+and `cts` are not used unless specified.
 
-Note that even after changing the RX and TX pins, if you have called setup 
+Note that even after changing the RX and TX pins, if you have called setup
 before then the previous RX and TX pins will still be connected to the Serial
 port as well - until you set them to something else using `digitalWrite` or
 `pinMode`.
 
-Flow control can be xOn/xOff (`flow:'xon'`) or hardware flow control
-(receive only) if `cts` is specified. If `cts` is set to a pin, the
-pin's value will be 0 when Espruino is ready for data and 1 when it isn't.
+Flow control can be xOn/xOff (`flow:'xon'`) or hardware flow control (receive
+only) if `cts` is specified. If `cts` is set to a pin, the pin's value will be 0
+when Espruino is ready for data and 1 when it isn't.
 
 By default, framing or parity errors don't create `framing` or `parity` events
-on the `Serial` object because storing these errors uses up additional
-storage in the queue. If you're intending to receive a lot of malformed
-data then the queue might overflow `E.getErrorFlags()` would return `FIFO_FULL`.
-However if you need to respond to `framing` or `parity` errors then 
-you'll need to use `errors:true` when initialising serial.
+on the `Serial` object because storing these errors uses up additional storage
+in the queue. If you're intending to receive a lot of malformed data then the
+queue might overflow `E.getErrorFlags()` would return `FIFO_FULL`. However if
+you need to respond to `framing` or `parity` errors then you'll need to use
+`errors:true` when initialising serial.
 
-On Linux builds there is no default Serial device, so you must specify
-a path to a device - for instance: `Serial1.setup(9600,{path:"/dev/ttyACM0"})`
+On Linux builds there is no default Serial device, so you must specify a path to
+a device - for instance: `Serial1.setup(9600,{path:"/dev/ttyACM0"})`
 
 You can also set up 'software serial' using code like:
 
@@ -277,7 +298,8 @@ var s = new Serial();
 s.setup(9600,{rx:a_pin, tx:a_pin});
 ```
 
-However software serial doesn't use `ck`, `cts`, `parity`, `flow` or `errors` parts of the initialisation object.
+However software serial doesn't use `ck`, `cts`, `parity`, `flow` or `errors`
+parts of the initialisation object.
 */
 void jswrap_serial_setup(JsVar *parent, JsVar *baud, JsVar *options) {
   if (!jsvIsObject(parent)) return;
@@ -285,14 +307,14 @@ void jswrap_serial_setup(JsVar *parent, JsVar *baud, JsVar *options) {
   JshUSARTInfo inf;
 
   if (jsvIsUndefined(options)) {
-    options = jsvObjectGetChild(parent, DEVICE_OPTIONS_NAME, 0);
+    options = jsvObjectGetChildIfExists(parent, DEVICE_OPTIONS_NAME);
   } else
     jsvLockAgain(options);
 
   bool ok = jsserialPopulateUSARTInfo(&inf, baud, options);
 #ifdef LINUX
   if (ok && jsvIsObject(options))
-    jsvObjectSetChildAndUnLock(parent, "path", jsvObjectGetChild(options, "path", 0));
+    jsvObjectSetChildAndUnLock(parent, "path", jsvObjectGetChildIfExists(options, "path"));
 #endif
 
   if (!ok) {
@@ -313,7 +335,7 @@ void jswrap_serial_setup(JsVar *parent, JsVar *baud, JsVar *options) {
     if (DEVICE_IS_USART(device))
       jshUSARTSetup(device, &inf);
   } else if (device == EV_NONE) {
-#ifndef SAVE_ON_FLASH
+#ifndef ESPR_NO_SOFTWARE_SERIAL
     // Software
     if (inf.pinTX != PIN_UNDEFINED) {
       jshPinSetState(inf.pinTX,  JSHPINSTATE_GPIO_OUT);
@@ -324,9 +346,9 @@ void jswrap_serial_setup(JsVar *parent, JsVar *baud, JsVar *options) {
       jsserialEventCallbackInit(parent, &inf);
     }
     if (inf.pinCK != PIN_UNDEFINED)
-      jsExceptionHere(JSET_ERROR, "Software Serial CK not implemented yet\n");
+      jsExceptionHere(JSET_ERROR, "Software Serial CK not implemented yet");
 #else
-    jsExceptionHere(JSET_ERROR, "No Software Serial in this build\n");
+    jsExceptionHere(JSET_ERROR, "No Software Serial in this build");
 #endif
   }
 }
@@ -338,8 +360,7 @@ void jswrap_serial_setup(JsVar *parent, JsVar *baud, JsVar *options) {
   "name" : "unsetup",
   "generate" : "jswrap_serial_unsetup"
 }
-If the serial (or software serial) device was set up,
-uninitialise it.
+If the serial (or software serial) device was set up, uninitialise it.
 */
 #ifndef SAVE_ON_FLASH
 void jswrap_serial_unsetup(JsVar *parent) {
@@ -347,8 +368,8 @@ void jswrap_serial_unsetup(JsVar *parent) {
   IOEventFlags device = jsiGetDeviceFromClass(parent);
 
   // Populate JshUSARTInfo from serial - if it exists
-  JsVar *options = jsvObjectGetChild(parent, DEVICE_OPTIONS_NAME, 0);
-  JsVar *baud = jsvObjectGetChild(parent, USART_BAUDRATE_NAME, 0);
+  JsVar *options = jsvObjectGetChildIfExists(parent, DEVICE_OPTIONS_NAME);
+  JsVar *baud = jsvObjectGetChildIfExists(parent, USART_BAUDRATE_NAME);
   if (options) {
     JshUSARTInfo inf;
     jsserialPopulateUSARTInfo(&inf, baud, options);
@@ -357,9 +378,11 @@ void jswrap_serial_unsetup(JsVar *parent) {
     if (inf.pinCTS!=PIN_UNDEFINED) jshPinSetState(inf.pinCTS, JSHPINSTATE_UNDEFINED);
     if (inf.pinRX!=PIN_UNDEFINED) jshPinSetState(inf.pinRX, JSHPINSTATE_UNDEFINED);
     if (inf.pinTX!=PIN_UNDEFINED) jshPinSetState(inf.pinTX, JSHPINSTATE_UNDEFINED);
+#ifndef ESPR_NO_SOFTWARE_SERIAL
     if (!DEVICE_IS_SERIAL(device))
       // It's software. Only thing we care about is RX as that uses watches
       jsserialEventCallbackKill(parent, &inf);
+#endif
   }
   jsvUnLock2(options, baud);
   // Remove stored settings
@@ -380,7 +403,7 @@ void jswrap_serial_unsetup(JsVar *parent) {
   "generate" : "jswrap_serial_idle"
 }*/
 bool jswrap_serial_idle() {
-#ifndef SAVE_ON_FLASH
+#ifndef ESPR_NO_SOFTWARE_SERIAL
   return jsserialEventCallbackIdle();
 #else
   return false;
@@ -413,7 +436,8 @@ void _jswrap_serial_print(JsVar *parent, JsVar *arg, bool isPrint, bool newLine)
 }
 Print a string to the serial port - without a line feed
 
- **Note:** This function replaces any occurances of `\n` in the string with `\r\n`. To avoid this, use `Serial.write`.
+ **Note:** This function replaces any occurrences of `\n` in the string with
+ `\r\n`. To avoid this, use `Serial.write`.
  */
 /*JSON{
   "type" : "method",
@@ -426,7 +450,9 @@ Print a string to the serial port - without a line feed
 }
 Print a line to the serial port with a newline (`\r\n`) at the end of it.
 
- **Note:** This function converts data to a string first, eg `Serial.print([1,2,3])` is equivalent to `Serial.print("1,2,3"). If you'd like to write raw bytes, use `Serial.write`.
+ **Note:** This function converts data to a string first, e.g.
+ `Serial.print([1,2,3])` is equivalent to `Serial.print("1,2,3")`. If you'd like
+ to write raw bytes, use `Serial.write`.
  */
 void jswrap_serial_print(JsVar *parent, JsVar *str) {
   _jswrap_serial_print(parent, str, true, false);
@@ -445,7 +471,9 @@ void jswrap_serial_println(JsVar *parent,  JsVar *str) {
 }
 Write a character or array of data to the serial port
 
-This method writes unmodified data, eg `Serial.write([1,2,3])` is equivalent to `Serial.write("\1\2\3")`. If you'd like data converted to a string first, use `Serial.print`.
+This method writes unmodified data, e.g. `Serial.write([1,2,3])` is equivalent to
+`Serial.write("\1\2\3")`. If you'd like data converted to a string first, use
+`Serial.print`.
  */
 void jswrap_serial_write(JsVar *parent, JsVar *args) {
   _jswrap_serial_print(parent, args, false, false);
@@ -470,17 +498,17 @@ Serial1.inject('Hello World');
 // prints "Got Hel","Got lo World" (characters can be split over multiple callbacks)
 ```
 
-This is most useful if you wish to send characters to Espruino's
-REPL (console) while it is on another device.
+This is most useful if you wish to send characters to Espruino's REPL (console)
+while it is on another device.
  */
-static void _jswrap_serial_inject_cb(int data, void *userData) {
-  IOEventFlags device = *(IOEventFlags*)userData;
-  jshPushIOCharEvent(device, (char)data);
+static void _jswrap_serial_inject_cb(unsigned char *data, unsigned int len, void *callbackData) {
+  IOEventFlags device = *(IOEventFlags*)callbackData;
+  jshPushIOCharEvents(device, (char*)data, len);
 }
 void jswrap_serial_inject(JsVar *parent, JsVar *args) {
   IOEventFlags device = jsiGetDeviceFromClass(parent);
   if (!DEVICE_IS_SERIAL(device)) return;
-  jsvIterateCallback(args, _jswrap_serial_inject_cb, (void*)&device);
+  jsvIterateBufferCallback(args, _jswrap_serial_inject_cb, (void*)&device);
 }
 
 /*JSON{
@@ -490,7 +518,8 @@ void jswrap_serial_inject(JsVar *parent, JsVar *args) {
   "generate" : "jswrap_stream_available",
   "return" : ["int","How many bytes are available"]
 }
-Return how many bytes are available to read. If there is already a listener for data, this will always return 0.
+Return how many bytes are available to read. If there is already a listener for
+data, this will always return 0.
  */
 
 /*JSON{
@@ -514,8 +543,58 @@ Return a string containing characters that have been received
   "generate" : "jswrap_pipe",
   "params" : [
     ["destination","JsVar","The destination file/stream that will receive content from the source."],
-    ["options","JsVar",["An optional object `{ chunkSize : int=32, end : bool=true, complete : function }`","chunkSize : The amount of data to pipe from source to destination at a time","complete : a function to call when the pipe activity is complete","end : call the 'end' function on the destination when the source is finished"]]
-  ]
+    ["options","JsVar",["[optional] An object `{ chunkSize : int=32, end : bool=true, complete : function }`","chunkSize : The amount of data to pipe from source to destination at a time","complete : a function to call when the pipe activity is complete","end : call the 'end' function on the destination when the source is finished"]]
+  ],
+  "typescript": "pipe(destination: any, options?: PipeOptions): void"
 }
 Pipe this USART to a stream (an object with a 'write' method)
  */
+
+
+/*JSON{
+  "type" : "method",
+  "class" : "Serial",
+  "name" : "flush",
+  "ifndef" : "SAVE_ON_FLASH",
+  "generate" : "jswrap_serial_flush"
+}
+Flush this serial stream (pause execution until all data has been sent)
+ */
+void jswrap_serial_flush(JsVar *parent) {
+  IOEventFlags device = jsiGetDeviceFromClass(parent);
+  if (device == EV_NONE) return;
+  jshTransmitFlushDevice(device);
+}
+
+/*JSON{
+  "type" : "method",
+  "class" : "Serial",
+  "name" : "isConnected",
+  "generate" : "jswrap_serial_isConnected",
+  "return" : ["bool","`true` if connected/initialised, false otherwise"]
+}
+(Added 2v25) Is the given Serial device connected?
+
+* USB/Bluetooth/Telnet/etc: Is this connected?
+* Serial1/etc: Has the device been initialised?
+* LoopbackA/LoopbackB/Terminal: always return true
+ */
+bool jswrap_serial_isConnected(JsVar *parent) {
+  IOEventFlags device = jsiGetDeviceFromClass(parent);
+  if (device==EV_LOOPBACKA || device==EV_LOOPBACKB) return true;
+#ifdef USE_TERMINAL
+  if (device == EV_TERMINAL) return true;
+#endif
+#ifdef USE_TELNET
+  if (device == EV_TELNET) return jswrap_telnet_isConnected();
+#endif
+#ifdef USB
+  if (device == EV_USBSERIAL) return jshIsUSBSERIALConnected();
+#endif
+#ifdef BLUETOOTH
+  if (device == EV_BLUETOOTH) return jsble_has_peripheral_connection();
+#endif
+  if (DEVICE_IS_USART(device))
+    return jshIsDeviceInitialised(device);
+  return false;
+}

@@ -204,7 +204,7 @@ void networkCreate(JsNetwork *net, JsNetworkType type) {
 }
 
 bool networkWasCreated() {
-  JsVar *v = jsvObjectGetChild(execInfo.hiddenRoot, NETWORK_VAR_NAME, 0);
+  JsVar *v = jsvObjectGetChildIfExists(execInfo.hiddenRoot, NETWORK_VAR_NAME);
   if (v) {
     jsvUnLock(v);
     return true;
@@ -216,7 +216,7 @@ bool networkWasCreated() {
 bool networkGetFromVar(JsNetwork *net) {
   // Retrieve a reference to the JsVar that represents the network and save in the
   // JsNetwork C structure.
-  net->networkVar = jsvObjectGetChild(execInfo.hiddenRoot, NETWORK_VAR_NAME, 0);
+  net->networkVar = jsvObjectGetChildIfExists(execInfo.hiddenRoot, NETWORK_VAR_NAME);
 
   // Validate that we have a network variable.
   if (!net->networkVar) {
@@ -345,14 +345,13 @@ int ssl_entropy(void *data, unsigned char *output, size_t len ) {
 }
 
 void ssl_freeSocketData(int sckt) {
-  JsVar *ssl = jsvObjectGetChild(execInfo.root, "ssl", 0);
+  JsVar *ssl = jsvObjectGetChildIfExists(execInfo.root, "ssl");
   if (!ssl) return;
   JsVar *scktVar = jsvNewFromInteger(sckt);
   JsVar *sslDataVar = jsvFindChildFromVar(ssl, scktVar, false);
   jsvUnLock(scktVar);
   JsVar *sslData = jsvSkipName(sslDataVar);
-  jsvRemoveChild(ssl, sslDataVar);
-  jsvUnLock(sslDataVar);
+  jsvRemoveChildAndUnLock(ssl, sslDataVar);
   jsvUnLock(ssl);
   SSLSocketData *sd = 0;
   if (jsvIsFlatString(sslData)) {
@@ -397,7 +396,7 @@ JsVar *load_cert_file(JsVar *cert) {
     if (started && pPtr[i] != '\n' && pPtr[i] != '\r') {
       pPtr[j++] = pPtr[i];
     }
-  }  
+  }
 
   JsVar *parsed = jsvNewFromString((const char *)pPtr);
   /* convert to binary */
@@ -412,7 +411,6 @@ JsVar *load_cert_file(JsVar *cert) {
   return buffer;
 }
 #endif /* USE_FILESYSTEM */
-
 
 /** Given a variable:
  *
@@ -435,7 +433,7 @@ JsVar *decode_certificate_var(JsVar *var) {
 }
 
 bool ssl_load_key(SSLSocketData *sd, JsVar *options) {
-  JsVar *keyVar = jsvObjectGetChild(options, "key", 0);
+  JsVar *keyVar = jsvObjectGetChildIfExists(options, "key");
   if (!keyVar) {
     return true; // still ok - just no key
   }
@@ -452,7 +450,7 @@ bool ssl_load_key(SSLSocketData *sd, JsVar *options) {
   jsvUnLock(keyVar);
   if (ret != 0) {
     JsVar *e = jswrap_crypto_error_to_jsvar(ret);
-    jsExceptionHere(JSET_INTERNALERROR, "HTTPS init failed! mbedtls_pk_parse_key: %v\n", e);
+    jsExceptionHere(JSET_INTERNALERROR, "HTTPS init failed! mbedtls_pk_parse_key: %v", e);
     jsvUnLock(e);
     return false;
   }
@@ -460,7 +458,7 @@ bool ssl_load_key(SSLSocketData *sd, JsVar *options) {
   return true;
 }
 bool ssl_load_owncert(SSLSocketData *sd, JsVar *options) {
-  JsVar *certVar = jsvObjectGetChild(options, "cert", 0);
+  JsVar *certVar = jsvObjectGetChildIfExists(options, "cert");
   if (!certVar) {
     return true; // still ok - just no cert
   }
@@ -477,14 +475,14 @@ bool ssl_load_owncert(SSLSocketData *sd, JsVar *options) {
   jsvUnLock(certVar);
   if (ret != 0) {
     JsVar *e = jswrap_crypto_error_to_jsvar(ret);
-    jsExceptionHere(JSET_INTERNALERROR, "HTTPS init failed! mbedtls_x509_crt_parse of 'cert': %v\n", e);
+    jsExceptionHere(JSET_INTERNALERROR, "HTTPS init failed! mbedtls_x509_crt_parse of 'cert': %v", e);
     jsvUnLock(e);
     return false;
   }
   return true;
 }
 bool ssl_load_cacert(SSLSocketData *sd, JsVar *options) {
-  JsVar *caVar = jsvObjectGetChild(options, "ca", 0);
+  JsVar *caVar = jsvObjectGetChildIfExists(options, "ca");
   if (!caVar) {
     return true; // still ok - just no ca
   }
@@ -501,7 +499,7 @@ bool ssl_load_cacert(SSLSocketData *sd, JsVar *options) {
   jsvUnLock(caVar);
   if (ret != 0) {
     JsVar *e = jswrap_crypto_error_to_jsvar(ret);
-    jsExceptionHere(JSET_INTERNALERROR, "HTTPS init failed! mbedtls_x509_crt_parse of 'ca': %v\n", e);
+    jsExceptionHere(JSET_INTERNALERROR, "HTTPS init failed! mbedtls_x509_crt_parse of 'ca': %v", e);
     jsvUnLock(e);
     return false;
   }
@@ -523,14 +521,13 @@ bool ssl_newSocketData(int sckt, JsVar *options) {
   if (!ssl) return false; // out of memory?
   JsVar *scktVar = jsvNewFromInteger(sckt);
   JsVar *sslDataVar = jsvFindChildFromVar(ssl, scktVar, true);
-  jsvUnLock(scktVar);
-  jsvUnLock(ssl);
+  jsvUnLock2(scktVar, ssl);
   if (!sslDataVar) {
     return 0; // out of memory
   }
   JsVar *sslData = jsvNewFlatStringOfLength(sizeof(SSLSocketData));
   if (!sslData) {
-    jsExceptionHere(JSET_INTERNALERROR, "Not enough memory to allocate SSL socket\n");
+    jsExceptionHere(JSET_INTERNALERROR, "Not enough memory to allocate SSL socket");
     jsvUnLock(sslDataVar);
     return false;
   }
@@ -559,7 +556,7 @@ bool ssl_newSocketData(int sckt, JsVar *options) {
                              (const unsigned char *) pers,
                              strlen(pers))) != 0 ) {
     JsVar *e = jswrap_crypto_error_to_jsvar(ret);
-    jsExceptionHere(JSET_INTERNALERROR, "HTTPS init failed! mbedtls_ctr_drbg_seed: %v\n", e );
+    jsExceptionHere(JSET_INTERNALERROR, "mbedtls_ctr_drbg_seed: %v", e );
     jsvUnLock(e);
     ssl_freeSocketData(sckt);
     return false;
@@ -579,7 +576,7 @@ bool ssl_newSocketData(int sckt, JsVar *options) {
                   MBEDTLS_SSL_TRANSPORT_STREAM,
                   MBEDTLS_SSL_PRESET_DEFAULT )) != 0 ) {
     JsVar *e = jswrap_crypto_error_to_jsvar(ret);
-    jsExceptionHere(JSET_INTERNALERROR, "HTTPS init failed! mbedtls_ssl_config_defaults returned: %v\n", e );
+    jsExceptionHere(JSET_INTERNALERROR, "mbedtls_ssl_config_defaults returned: %v", e );
     jsvUnLock(e);
     ssl_freeSocketData(sckt);
     return false;
@@ -589,7 +586,7 @@ bool ssl_newSocketData(int sckt, JsVar *options) {
     // this would get set if options.key was set
     if (( ret = mbedtls_ssl_conf_own_cert(&sd->conf, &sd->owncert, &sd->pkey)) != 0 ) {
       JsVar *e = jswrap_crypto_error_to_jsvar(ret);
-      jsExceptionHere(JSET_INTERNALERROR, "HTTPS init failed! mbedtls_ssl_conf_own_cert: %v\n", e );
+      jsExceptionHere(JSET_INTERNALERROR, "mbedtls_ssl_conf_own_cert: %v", e );
       jsvUnLock(e);
       ssl_freeSocketData(sckt);
       return false;
@@ -603,7 +600,7 @@ bool ssl_newSocketData(int sckt, JsVar *options) {
 
   if (( ret = mbedtls_ssl_setup( &sd->ssl, &sd->conf )) != 0) {
     JsVar *e = jswrap_crypto_error_to_jsvar(ret);
-    jsExceptionHere(JSET_INTERNALERROR, "Failed! mbedtls_ssl_setup: %v\n", e );
+    jsExceptionHere(JSET_INTERNALERROR, "mbedtls_ssl_setup: %v", e );
     jsvUnLock(e);
     ssl_freeSocketData(sckt);
     return false;
@@ -611,7 +608,7 @@ bool ssl_newSocketData(int sckt, JsVar *options) {
 
   if (( ret = mbedtls_ssl_set_hostname( &sd->ssl, "mbed TLS Server 1" )) != 0) {
     JsVar *e = jswrap_crypto_error_to_jsvar(ret);
-    jsExceptionHere(JSET_INTERNALERROR, "HTTPS init failed! mbedtls_ssl_set_hostname: %v\n", e );
+    jsExceptionHere(JSET_INTERNALERROR, "HTTPS init failed! mbedtls_ssl_set_hostname: %v", e );
     jsvUnLock(e);
     ssl_freeSocketData(sckt);
     return false;
@@ -628,7 +625,7 @@ bool ssl_newSocketData(int sckt, JsVar *options) {
 
 SSLSocketData *ssl_getSocketData(int sckt) {
   // try and find the socket data variable
-  JsVar *ssl = jsvObjectGetChild(execInfo.root, "ssl", 0);
+  JsVar *ssl = jsvObjectGetChildIfExists(execInfo.root, "ssl");
   if (!ssl) return 0;
   JsVar *sslData = jsvGetArrayItem(ssl, sckt);
   jsvUnLock(ssl);
@@ -644,7 +641,7 @@ SSLSocketData *ssl_getSocketData(int sckt) {
     if ( ( ret = mbedtls_ssl_handshake( &sd->ssl ) ) != 0 ) {
       if( ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE ) {
         JsVar *e = jswrap_crypto_error_to_jsvar(ret);
-        jsExceptionHere(JSET_INTERNALERROR,  "Failed! mbedtls_ssl_handshake returned %v\n", e );
+        jsExceptionHere(JSET_INTERNALERROR,  "mbedtls_ssl_handshake returned %v", e );
         jsvUnLock(e);
         return 0; // this signals an error
       }
@@ -658,7 +655,7 @@ SSLSocketData *ssl_getSocketData(int sckt) {
       if( ( flags = mbedtls_ssl_get_verify_result( &sd->ssl ) ) != 0 ) {
         char vrfy_buf[512];
         mbedtls_x509_crt_verify_info( vrfy_buf, sizeof( vrfy_buf ), "  ! ", flags );
-        jsExceptionHere(JSET_INTERNALERROR, "Failed! %s\n", vrfy_buf );
+        jsExceptionHere(JSET_INTERNALERROR, "mbedtls_x509_crt_verify: %s", vrfy_buf );
         return 0;
       }
       sd->connecting = false;

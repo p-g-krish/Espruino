@@ -34,6 +34,8 @@ class Cat {
   static isDog() {
     return false;
   }
+  field = 42
+  static staticField = 43
 }
 
 class Lion extends Cat {
@@ -41,7 +43,6 @@ class Lion extends Cat {
     return super.speak()+this.name + ' roars.';
   }
   static isReallyADog() {
-    trace(super);
     return super.isDog();
   }
 }
@@ -53,8 +54,10 @@ var c = new Cat("Tiddles");
 var l = new Lion("Alan");
 var l2 = new Lion("Nigel"); // NOTE: making this an instance of Lion2 breaks things
 var rb = l.getLegs()==4 && c.speak()=="Tiddles makes a noise." && l.speak()=="Alan makes a noise.Alan roars." && l2.speak()=="Nigel makes a noise.Nigel roars." && Lion.isReallyADog()===false;
+var rc = c.field==42;
+var rd = Cat.staticField==43;
 
 // --------------------------------------------
 
-result = ra && rb; 
+result = ra && rb && rc && rd; 
 

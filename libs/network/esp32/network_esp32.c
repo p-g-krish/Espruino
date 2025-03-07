@@ -11,10 +11,12 @@
  * Implementation of JsNetwork for ESP32 - cloned from linux
  * ----------------------------------------------------------------------------
  */
-#include "network_esp32.h"
-
-#include "network.h"
 #include <string.h> // for memset
+#include <stdlib.h>
+
+#include "network_esp32.h"
+#include "network.h"
+#include "jsinteractive.h"
 
 #define INVALID_SOCKET ((SOCKET)(-1))
 #define SOCKET_ERROR (-1)
@@ -53,8 +55,9 @@
 void net_esp32_gethostbyname(JsNetwork *net, char * hostName, uint32_t* out_ip_addr) {
   NOT_USED(net);
   struct hostent * host_addr_p = gethostbyname(hostName);
-  if (host_addr_p)
+  if (host_addr_p) {
     *out_ip_addr = *(uint32_t*)*host_addr_p->h_addr_list;
+  }
 }
 
 /// Called on idle. Do any checks required for this device
@@ -92,8 +95,9 @@ int net_esp32_createsocket(JsNetwork *net, SocketType socketType, uint32_t host,
     if (scktType == SOCK_DGRAM) { // only for UDP
       // set broadcast
       int optval = 1;
-      if (setsockopt(sckt,SOL_SOCKET,SO_BROADCAST,(const char *)&optval,sizeof(optval))<0)
-        jsWarn("setsockopt(SO_BROADCAST) failed\n");
+      if (setsockopt(sckt,SOL_SOCKET,SO_BROADCAST,(const char *)&optval,sizeof(optval))<0) {
+        jsDebug(DBG_INFO, "setsockopt(SO_BROADCAST) failed\n");
+      }
     } else {
       sockaddr_in       sin;
       sin.sin_family = AF_INET;
@@ -126,14 +130,15 @@ int net_esp32_createsocket(JsNetwork *net, SocketType socketType, uint32_t host,
     }
 
     if (scktType != SOCK_DGRAM ||
-        jsvGetBoolAndUnLock(jsvObjectGetChild(options, "reuseAddr", 0))) {
+        jsvObjectGetBoolChild(options, "reuseAddr")) {
       int optval = 1;
-      if (setsockopt(sckt,SOL_SOCKET,SO_REUSEADDR,(const char *)&optval,sizeof(optval)) < 0)
-        jsWarn("setsockopt(SO_REUSADDR) failed\n");
+      if (setsockopt(sckt,SOL_SOCKET,SO_REUSEADDR,(const char *)&optval,sizeof(optval)) < 0) {
+        jsDebug(DBG_INFO, "setsockopt(SO_REUSADDR) failed\n");
+      }  
 #ifdef SO_REUSEPORT
-    // not supported by esp-idf 3.1
-    //if (setsockopt(sckt,SOL_SOCKET,SO_REUSEPORT,(const char *)&optval,sizeof(optval)) < 0)
-      //jsWarn("setsockopt(SO_REUSPORT) failed\n");
+      if (setsockopt(sckt,SOL_SOCKET,SO_REUSEPORT,(const char *)&optval,sizeof(optval)) < 0) {
+        jsDebug(DBG_INFO, "setsockopt(SO_REUSPORT) failed\n");
+      }
 #endif
     }
 
@@ -153,7 +158,7 @@ int net_esp32_createsocket(JsNetwork *net, SocketType socketType, uint32_t host,
 
     // multicast support
     // FIXME: perhaps extend the JsNetwork with addmembership/removemembership instead of using options
-    JsVar *mgrpVar = jsvObjectGetChild(options, "multicastGroup", 0);
+    JsVar *mgrpVar = jsvObjectGetChildIfExists(options, "multicastGroup");
     if (mgrpVar) {
         char ipStr[18];
 
@@ -162,7 +167,7 @@ int net_esp32_createsocket(JsNetwork *net, SocketType socketType, uint32_t host,
         jsvUnLock(mgrpVar);
         net_esp32_gethostbyname(net, ipStr, &grpip);
 
-        JsVar *ipVar = jsvObjectGetChild(options, "multicastIp", 0);
+        JsVar *ipVar = jsvObjectGetChildIfExists(options, "multicastIp");
         jsvGetString(ipVar, ipStr, sizeof(ipStr));
         jsvUnLock(ipVar);
         uint32_t ip;
@@ -188,15 +193,17 @@ int net_esp32_createsocket(JsNetwork *net, SocketType socketType, uint32_t host,
 #ifdef SO_RCVBUF
   int rcvBufSize = net->data.recvBufferSize;
   if (rcvBufSize > 0) {
-    if (setsockopt(sckt,SOL_SOCKET,SO_RCVBUF,(const char *)&rcvBufSize,sizeof(rcvBufSize))<0)
-      jsWarn("setsockopt(SO_RCVBUF) failed\n");
+    if (setsockopt(sckt,SOL_SOCKET,SO_RCVBUF,(const char *)&rcvBufSize,sizeof(rcvBufSize))<0) {
+      jsDebug(DBG_INFO, "setsockopt(SO_RCVBUF) failed\n");
+    }
   }
 #endif
 #ifdef SO_NOSIGPIPE
   // disable SIGPIPE
   int optval = 1;
-  if (setsockopt(sckt,SOL_SOCKET,SO_NOSIGPIPE,(const char *)&optval,sizeof(optval))<0)
-    jsWarn("setsockopt(SO_NOSIGPIPE) failed\n");
+  if (setsockopt(sckt,SOL_SOCKET,SO_NOSIGPIPE,(const char *)&optval,sizeof(optval))<0) {
+    jsDebug(DBG_INFO, "setsockopt(SO_NOSIGPIPE) failed\n");
+  }
 #endif
 
   return sckt;

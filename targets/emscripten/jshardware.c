@@ -31,6 +31,14 @@
 
 #define FLASH_UNITARY_WRITE_SIZE 4
 #define FAKE_FLASH_BLOCKSIZE 4096
+
+// ----------------------------------------------------------------------------
+/*Reason - Needed for latest build of EMCC(3.1.55).  Else undefined symbol*/
+EM_JS(void, emscripten_memcpy_js, (uint8_t* dest, uint8_t* src, size_t numBytes), {
+  var destHeap = new Uint8Array(Module.HEAPU8.buffer, dest, numBytes);
+  var srcHeap = new Uint8Array(Module.HEAPU8.buffer, src, numBytes);
+  destHeap.set(srcHeap);
+});
 // ----------------------------------------------------------------------------
 
 Pin eventFlagsToPin[16];
@@ -69,7 +77,7 @@ void jshBusyIdle() {
 
 int jshGetSerialNumber(unsigned char *data, int maxChars) {
   long initialSerial = 0;
-  long long serial = 0xDEADDEADDEADDEADL; 
+  long long serial = 0xDEADDEADDEADDEADL;
   memcpy(&data[0], &initialSerial, 4);
   memcpy(&data[4], &serial, 8);
   return 12;
@@ -143,11 +151,8 @@ int jshPinAnalogFast(Pin pin) {
   return 0;
 }
 
-JshPinFunction jshPinAnalogOutput(Pin pin, JsVarFloat value, JsVarFloat freq, JshAnalogOutputFlags flags) { // if freq<=0, 
+JshPinFunction jshPinAnalogOutput(Pin pin, JsVarFloat value, JsVarFloat freq, JshAnalogOutputFlags flags) { // if freq<=0,
   return JSH_NOTHING;
-}
-
-void jshPinPulse(Pin pin, bool value, JsVarFloat time) {
 }
 
 bool jshCanWatch(Pin pin) {
@@ -161,7 +166,7 @@ IOEventFlags jshGetEventFlagsForPin(Pin pin) {
   return EV_NONE;
 }
 
-IOEventFlags jshPinWatch(Pin pin, bool shouldWatch) {
+IOEventFlags jshPinWatch(Pin pin, bool shouldWatch, JshPinWatchFlags flags) {
   if (shouldWatch)
     for (int i=0;i<16;i++)
       if (eventFlagsToPin[i]==PIN_UNDEFINED) {
@@ -180,8 +185,8 @@ bool jshGetWatchedPinState(IOEventFlags device) {
   return jshPinGetValue(eventFlagsToPin[device-EV_EXTI0]);
 }
 
-bool jshIsEventForPin(IOEvent *event, Pin pin) {
-  return IOEVENTFLAGS_GETTYPE(event->flags) == jshGetEventFlagsForPin(pin);
+bool jshIsEventForPin(IOEventFlags eventFlags, Pin pin) {
+  return IOEVENTFLAGS_GETTYPE(eventFlags) == jshGetEventFlagsForPin(pin);
 }
 
 void jshUSARTSetup(IOEventFlags device, JshUSARTInfo *inf) {
@@ -275,8 +280,9 @@ void jshFlashErasePage(uint32_t addr) {
   uint32_t startAddr;
   uint32_t pageSize;
   if (jshFlashGetPage(addr, &startAddr, &pageSize)) {
-    for (uint32_t i=0;i<pageSize;i++)
-      EM_ASM_({ hwFlashWrite($0,0xFF); }, startAddr+i-FLASH_START);
+    char ff[FAKE_FLASH_BLOCKSIZE];
+    memset(ff,0xFF,FAKE_FLASH_BLOCKSIZE);
+    EM_ASM_({ hwFlashWritePtr($0,$1,$2); }, startAddr-FLASH_START, ff, pageSize );
   }
 #endif
 }
@@ -290,8 +296,7 @@ void jshFlashRead(void *buf, uint32_t addr, uint32_t len) {
 void jshFlashWrite(void *buf, uint32_t addr, uint32_t len) {
   if (addr<FLASH_START) return;
 #ifdef EMSCRIPTEN
-  for (uint32_t i=0;i<len;i++)
-    EM_ASM_({ hwFlashWrite($0,$1); }, addr+i-FLASH_START, ((uint8_t*)buf)[i]);
+  EM_ASM_({ hwFlashWritePtr($0,$1,$2); }, addr-FLASH_START, (uint8_t*)buf, len);
 #endif
 }
 

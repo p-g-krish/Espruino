@@ -45,13 +45,20 @@ else ifdef NUCLEO
 	if [ -d "/media/$(USER)/NUCLEO" ]; then cp $(PROJ_NAME).bin /media/$(USER)/NUCLEO;sync; fi
 	if [ -d "/media/NUCLEO" ]; then cp $(PROJ_NAME).bin /media/NUCLEO;sync; fi
 else
-	@echo ST-LINK flash
-	st-flash --reset write $(PROJ_NAME).bin $(BASEADDRESS)
+	@echo "-- ST-Link flash: reset the target, then immediately press any key to proceed";
+	@if read -n 1 -s && st-flash --reset write $(PROJ_NAME).bin $(BASEADDRESS); then \
+		echo "ST-Link flashed OK"; \
+	else \
+		echo "-- J-Link flash"; \
+		echo "USB\nconnect\nloadfile $(PROJ_NAME).bin $(BASEADDRESS)\nexit" > JLinkCommands.txt; \
+		JLinkExe -device $(CHIP) -if SWD -speed 4000 -CommandFile JLinkCommands.txt; \
+		rm JLinkCommands.txt; \
+	fi
 endif
 
 serialflash: all
 	@echo STM32 inbuilt serial bootloader, set BOOT0=1, BOOT1=0
-	python scripts/stm32loader.py -b 460800 -a $(BASEADDRESS) -ew $(STM32LOADER_FLAGS) $(PROJ_NAME).bin
-#	python scripts/stm32loader.py -b 460800 -a $(BASEADDRESS) -ewv $(STM32LOADER_FLAGS) $(PROJ_NAME).bin
+	python2.7 scripts/stm32loader.py -b 460800 -a $(BASEADDRESS) -ew $(STM32LOADER_FLAGS) $(PROJ_NAME).bin
+#	python2.7 scripts/stm32loader.py -b 460800 -a $(BASEADDRESS) -ewv $(STM32LOADER_FLAGS) $(PROJ_NAME).bin
 
 

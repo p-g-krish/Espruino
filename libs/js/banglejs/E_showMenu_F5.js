@@ -37,7 +37,6 @@
   var cFg = -1; // foreground col
   var cHighlightBg = 0x02F7;
   var cHighlightFg = -1;
-  var loc = require("locale");
   var l = {
     draw : function() {
       g.reset().setColor(cFg);
@@ -54,17 +53,17 @@
       while (rows--) {
         var name = menuItems[idx];
         var item = items[name];
+        if (item.title) name = item.title;
         var hl = (idx==options.selected && !l.selectEdit);
         g.setColor(hl ? cHighlightBg : cBg);
         g.fillRect(x,iy,x2,iy+options.fontHeight-1);
         g.setColor(hl ? cHighlightFg : cFg);
         g.setFontAlign(-1,-1);
-        g.drawString(loc.translate(name),x,iy);
+        g.drawString(name,x,iy);
         if ("object" == typeof item) {
           var xo = x2;
           var v = item.value;
           if (item.format) v=item.format(v);
-          v = loc.translate(""+v);
           if (l.selectEdit && idx==options.selected) {
             xo -= 24 + 1;
             g.setColor(cHighlightBg);
@@ -80,7 +79,7 @@
         idx++;
       }
       g.setFontAlign(-1,-1);
-      var more = idx<menuItems.length;      
+      var more = idx<menuItems.length;
       g.drawImage("\b\b\x01\x108|\xFE\x10\x10\x10\x10"/*E.toString(8,8,1,
         0b00010000,
         0b00111000,
@@ -107,7 +106,7 @@
     },
     select : function() {
       var item = items[menuItems[options.selected]];
-      if ("function" == typeof item) item(l);
+      if ("function" == typeof item) item();
       else if ("object" == typeof item) {
         // if a number, go into 'edit mode'
         if ("number" == typeof item.value)
@@ -138,5 +137,5 @@
 		    setWatch(function() { l.move(1); }, BTN3, {repeat:1}),
 		    setWatch(function() { l.select(); }, BTN2, {repeat:1})
 		  ];
-		  return l;  
+		  return l;
 })

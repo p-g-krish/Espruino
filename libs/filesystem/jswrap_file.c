@@ -41,7 +41,7 @@ bool isSdSPISetup();
 // 'path' must be of JS_DIR_BUF_SIZE
 bool jsfsGetPathString(char *pathStr, JsVar *path) {
   if (jsvGetString(path, pathStr, JS_DIR_BUF_SIZE)==JS_DIR_BUF_SIZE) {
-    jsExceptionHere(JSET_ERROR, "File path too long\n");
+    jsExceptionHere(JSET_ERROR, "File path too long");
     return false;
   }
   return true;
@@ -71,10 +71,15 @@ void jsfsReportError(const char *msg, FRESULT res) {
 }
 
 bool jsfsInit() {
-   
+#ifdef SD_POWER_PIN
+  if (jshPinGetValue(SD_POWER_PIN)==0) {
+    jshPinOutput(SD_POWER_PIN, 1);
+    jshDelayMicroseconds(5000);
+  }
+#endif
 #ifndef LINUX
   if (!fat_initialised) {
-#ifndef USE_FLASHFS  
+#ifndef USE_FLASHFS
 #ifdef SD_CARD_ANYWHERE
     if (!isSdSPISetup()) {
 #ifdef SD_SPI
@@ -95,12 +100,14 @@ bool jsfsInit() {
 #endif // SD_SPI
     }
 #endif // SD_CARD_ANYWHER
-#endif // USE_FLASHFS 
+#endif // USE_FLASHFS
     FRESULT res;
 
-    if ((res = f_mount(&jsfsFAT, "", 1)) != FR_OK) {
-       jsfsReportError("Unable to mount media", res);
-       return false;
+    if ((res = f_mount(&jsfsFAT, "", 1/*immediate mount*/)) != FR_OK) {
+#ifndef PIPBOY  // Don't throw an error for the Pip-Boy - just return false
+      jsfsReportError("Unable to mount media", res);
+#endif
+      return false;
     }
     fat_initialised = true;
   }
@@ -119,7 +126,8 @@ bool jsfsInit() {
     ["csPin","pin","The pin to use for Chip Select"]
   ]
 }
-Setup the filesystem so that subsequent calls to `E.openFile` and `require('fs').*` will use an SD card on the supplied SPI device and pin.
+Setup the filesystem so that subsequent calls to `E.openFile` and
+`require('fs').*` will use an SD card on the supplied SPI device and pin.
 
 It can even work using software SPI - for instance:
 
@@ -136,16 +144,17 @@ console.log(require("fs").readdirSync());
 
 See [the page on File IO](http://www.espruino.com/File+IO) for more information.
 
-**Note:** We'd strongly suggest you add a pullup resistor from CD/CS pin to 3.3v. It is
-good practise to avoid accidental writes before Espruino is initialised, and some cards
-will not work reliably without one.
+**Note:** We'd strongly suggest you add a pullup resistor from CD/CS pin to
+3.3v. It is good practise to avoid accidental writes before Espruino is
+initialised, and some cards will not work reliably without one.
 
-**Note:** If you want to remove an SD card after you have started using it, you *must* call `E.unmountSD()` or you may cause damage to the card.
+**Note:** If you want to remove an SD card after you have started using it, you
+*must* call `E.unmountSD()` or you may cause damage to the card.
 */
 void jswrap_E_connectSDCard(JsVar *spi, Pin csPin) {
 #ifdef SD_CARD_ANYWHERE
   if (!jsvIsObject(spi)) {
-    jsExceptionHere(JSET_ERROR, "First argument is a %t, not an SPI object\n", spi);
+    jsExceptionHere(JSET_ERROR, "First argument is a %t, not an SPI object", spi);
     return;
   }
   if (!jshIsPinValid(csPin)) {
@@ -165,11 +174,16 @@ void jswrap_E_connectSDCard(JsVar *spi, Pin csPin) {
   "type" : "class",
   "class" : "File"
 }
-This is the File object - it allows you to stream data to and from files (As opposed to the `require('fs').readFile(..)` style functions that read an entire file).
+This is the File object - it allows you to stream data to and from files (As
+opposed to the `require('fs').readFile(..)` style functions that read an entire
+file).
 
-To create a File object, you must type ```var fd = E.openFile('filepath','mode')``` - see [E.openFile](#l_E_openFile) for more information.
+To create a File object, you must type ```var fd =
+E.openFile('filepath','mode')``` - see [E.openFile](#l_E_openFile) for more
+information.
 
-**Note:** If you want to remove an SD card after you have started using it, you *must* call `E.unmountSD()` or you may cause damage to the card.
+**Note:** If you want to remove an SD card after you have started using it, you
+*must* call `E.unmountSD()` or you may cause damage to the card.
 */
 
 static JsVar* fsGetArray(bool create) {
@@ -178,7 +192,7 @@ static JsVar* fsGetArray(bool create) {
 
 static bool fileGetFromVar(JsFile *file, JsVar *parent) {
   bool ret = false;
-  JsVar *fHandle = jsvObjectGetChild(parent, JS_FS_DATA_NAME, 0);
+  JsVar *fHandle = jsvObjectGetChildIfExists(parent, JS_FS_DATA_NAME);
   if (fHandle && jsvIsFlatString(fHandle)) {
     file->data = (JsFileData*)jsvGetFlatStringPointer(fHandle);
     file->fileVar = parent;
@@ -190,11 +204,8 @@ static bool fileGetFromVar(JsFile *file, JsVar *parent) {
   return ret;
 }
 
-/*JSON{
-  "type" : "kill",
-  "generate" : "jswrap_file_kill"
-}*/
-void jswrap_file_kill() {
+/// Uninit all software-related SD card stuff - but don't de-init hardware
+void jswrap_file_kill_sw() {
   JsVar *arr = fsGetArray(false);
   if (arr) {
     JsvObjectIterator it;
@@ -216,6 +227,14 @@ void jswrap_file_kill() {
     f_mount(0, 0, 0);
   }
 #endif
+}
+
+/*JSON{
+  "type" : "kill",
+  "generate" : "jswrap_file_kill"
+}*/
+void jswrap_file_kill() {
+  jswrap_file_kill_sw();
 #ifdef SD_CARD_ANYWHERE
   sdSPISetup(0, PIN_UNDEFINED);
 #endif
@@ -227,7 +246,9 @@ void jswrap_file_kill() {
   "name" : "unmountSD",
   "generate" : "jswrap_E_unmountSD"
 }
-Unmount the SD card, so it can be removed. If you remove the SD card without calling this you may cause corruption, and you will be unable to access another SD card until you reset Espruino or call `E.unmountSD()`.
+Unmount the SD card, so it can be removed. If you remove the SD card without
+calling this you may cause corruption, and you will be unable to access another
+SD card until you reset Espruino or call `E.unmountSD()`.
 */
 void jswrap_E_unmountSD() {
   jswrap_file_kill();
@@ -372,10 +393,8 @@ void jswrap_file_close(JsVar* parent) {
       JsVar *arr = fsGetArray(false);
       if (arr) {
         JsVar *idx = jsvGetIndexOf(arr, file.fileVar, true);
-        if (idx) {
-          jsvRemoveChild(arr, idx);
-          jsvUnLock(idx);
-        }
+        if (idx)
+          jsvRemoveChildAndUnLock(arr, idx);
         jsvUnLock(arr);
       }
     }
@@ -394,12 +413,11 @@ void jswrap_file_close(JsVar* parent) {
 }
 Write data to a file.
 
-**Note:** By default this function flushes all changes to the
-SD card, which makes it slow (but also safe!). You can use
-`E.setFlags({unsyncFiles:1})` to disable this behaviour and
-really speed up writes - but then you must be sure to close
-all files you are writing before power is lost or you will
-cause damage to your SD card's filesystem.
+**Note:** By default this function flushes all changes to the SD card, which
+makes it slow (but also safe!). You can use `E.setFlags({unsyncFiles:1})` to
+disable this behaviour and really speed up writes - but then you must be sure to
+close all files you are writing before power is lost or you will cause damage to
+your SD card's filesystem.
 */
 size_t jswrap_file_write(JsVar* parent, JsVar* buffer) {
   if (!buffer) return 0;
@@ -411,7 +429,12 @@ size_t jswrap_file_write(JsVar* parent, JsVar* buffer) {
       if(file.data->mode == FM_WRITE || file.data->mode == FM_READ_WRITE) {
         JsvIterator it;
         jsvIteratorNew(&it, buffer, JSIF_EVERY_ARRAY_ELEMENT);
+#ifdef ESPR_FS_LARGE_WRITE_BUFFER
+        // writes are faster with sector-size buffers but we can't always safely allocate 512b on the stack unless we're sure we have a big stack
+        char buf[512];
+#else
         char buf[32];
+#endif
 
         while (jsvIteratorHasElement(&it)) {
           // pull in a buffer's worth of data
@@ -549,9 +572,9 @@ Seek to a certain position in the file
 */
 void jswrap_file_skip_or_seek(JsVar* parent, int nBytes, bool is_skip) {
   if (nBytes<0) {
-    if ( is_skip ) 
+    if ( is_skip )
 	  jsWarn("Bytes to skip must be >=0");
-    else 
+    else
 	  jsWarn("Position to seek to must be >=0");
     return;
   }
@@ -579,8 +602,9 @@ void jswrap_file_skip_or_seek(JsVar* parent, int nBytes, bool is_skip) {
   "generate" : "jswrap_pipe",
   "params" : [
     ["destination","JsVar","The destination file/stream that will receive content from the source."],
-    ["options","JsVar",["An optional object `{ chunkSize : int=32, end : bool=true, complete : function }`","chunkSize : The amount of data to pipe from source to destination at a time","complete : a function to call when the pipe activity is complete","end : call the 'end' function on the destination when the source is finished"]]
-  ]
+    ["options","JsVar",["[optional] An object `{ chunkSize : int=32, end : bool=true, complete : function }`","chunkSize : The amount of data to pipe from source to destination at a time","complete : a function to call when the pipe activity is complete","end : call the 'end' function on the destination when the source is finished"]]
+  ],
+  "typescript": "pipe(destination: any, options?: PipeOptions): void"
 }
 Pipe this file to a stream (an object with a 'write' method)
 */
@@ -594,12 +618,12 @@ Pipe this file to a stream (an object with a 'write' method)
   "generate" : "jswrap_E_flashFatFS",
   "ifdef" : "USE_FLASHFS",
    "params" : [
-    ["options","JsVar",["An optional object `{ addr : int=0x300000, sectors : int=256, format : bool=false }`","addr : start address in flash","sectors: number of sectors to use","format:  Format the media"]]
+    ["options","JsVar",["[optional] An object `{ addr : int=0x300000, sectors : int=256, format : bool=false }`","addr : start address in flash","sectors: number of sectors to use","format:  Format the media"]]
   ],
-  "return" : ["bool","True on success, or false on failure"]  
+  "return" : ["bool","True on success, or false on failure"]
 }
-Change the paramters used for the flash filesystem.
-The default address is the last 1Mb of 4Mb Flash, 0x300000, with total size of 1Mb.
+Change the parameters used for the flash filesystem. The default address is the
+last 1Mb of 4Mb Flash, 0x300000, with total size of 1Mb.
 
 Before first use the media needs to be formatted.
 
@@ -615,8 +639,9 @@ fs.writeFileSync("bang.txt", "This is the way the world ends\nnot with a bang bu
 fs.readdirSync();
 ```
 
-This will create a drive of 100 * 4096 bytes at 0x300000. Be careful with the selection of flash addresses as you can overwrite firmware!
-You only need to format once, as each will erase the content.
+This will create a drive of 100 * 4096 bytes at 0x300000. Be careful with the
+selection of flash addresses as you can overwrite firmware! You only need to
+format once, as each will erase the content.
 
 `E.flashFatFS({ addr:0x300000,sectors:100,format:true });`
 */
@@ -626,17 +651,17 @@ int jswrap_E_flashFatFS(JsVar* options) {
   uint16_t sectors = FS_SECTOR_COUNT;
   uint8_t format = 0;
   if (jsvIsObject(options)) {
-    JsVar *a = jsvObjectGetChild(options, "addr", false);
+    JsVar *a = jsvObjectGetChildIfExists(options, "addr");
     if (a) {
       if (jsvIsNumeric(a) && jsvGetInteger(a)>0x100000)
         addr = (uint32_t)jsvGetInteger(a);
     }
-    JsVar *s = jsvObjectGetChild(options, "sectors", false);
+    JsVar *s = jsvObjectGetChildIfExists(options, "sectors");
     if (s) {
       if (jsvIsNumeric(s) && jsvGetInteger(s)>0)
         sectors = (uint16_t)jsvGetInteger(s);
     }
-    JsVar *f = jsvObjectGetChild(options, "format", false);
+    JsVar *f = jsvObjectGetChildIfExists(options, "format");
     if (f) {
       if (jsvIsBoolean(f))
         format = jsvGetBool(f);
@@ -645,18 +670,18 @@ int jswrap_E_flashFatFS(JsVar* options) {
   else if (!jsvIsUndefined(options)) {
     jsExceptionHere(JSET_TYPEERROR, "'options' must be an object, or undefined");
   }
-  
+
   uint8_t init=flashFatFsInit(addr, sectors);
   if (init) {
     if ( format ) {
-      uint8_t res = f_mount(&jsfsFAT, "", 0);
-      jsDebug(DBG_INFO,"Formatting Flash");
+      uint8_t res = f_mount(&jsfsFAT, "", 0/*delayed mount?*/);
+      jsDebug(DBG_INFO,"Formatting Flash\n");
       res = f_mkfs("", 1, 0);  // Super Floppy format, using all space (not partition table)
       if (res != FR_OK) {
         jsExceptionHere(JSET_INTERNALERROR, "Flash Formatting error:",res);
         return false;
      }
-   }    
+   }
   }
   jsfsInit();
   return true;

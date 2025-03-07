@@ -22,7 +22,11 @@
   "type" : "class",
   "class" : "Trig"
 }
-This class exists in order to interface Espruino with fast-moving trigger wheels. Trigger wheels are physical discs with evenly spaced teeth cut into them, and often with one or two teeth next to each other missing. A sensor sends a signal whenever a tooth passed by, and this allows a device to measure not only RPM, but absolute position.
+This class exists in order to interface Espruino with fast-moving trigger
+wheels. Trigger wheels are physical discs with evenly spaced teeth cut into
+them, and often with one or two teeth next to each other missing. A sensor sends
+a signal whenever a tooth passed by, and this allows a device to measure not
+only RPM, but absolute position.
 
 This class is currently in testing - it is NOT AVAILABLE on normal boards.
 */
@@ -72,16 +76,16 @@ void jswrap_trig_setup(Pin pin, JsVar *options) {
   JsVarFloat minRPM = 30;
   if (jsvIsObject(options)) {
     JsVar *v;
-    v = jsvObjectGetChild(options, "teethMissing", 0);
+    v = jsvObjectGetChildIfExists(options, "teethMissing");
     if (!jsvIsUndefined(v)) trig->teethMissing = (unsigned char)jsvGetInteger(v);
     jsvUnLock(v);
-    v = jsvObjectGetChild(options, "teethTotal", 0);
+    v = jsvObjectGetChildIfExists(options, "teethTotal");
     if (!jsvIsUndefined(v)) trig->teethTotal = (unsigned char)jsvGetInteger(v);
     jsvUnLock(v);
-    v = jsvObjectGetChild(options, "minRPM", 0);
+    v = jsvObjectGetChildIfExists(options, "minRPM");
     if (!jsvIsUndefined(v)) minRPM = jsvGetFloat(v);
     jsvUnLock(v);
-    v = jsvObjectGetChild(options, "keyPosition", 0);
+    v = jsvObjectGetChildIfExists(options, "keyPosition");
     if (!jsvIsUndefined(v)) trig->keyPosition = jsvGetFloat(v);
     jsvUnLock(v);
   }
@@ -102,9 +106,9 @@ void jswrap_trig_setup(Pin pin, JsVar *options) {
   trig->wrongTriggerTeeth = 0;
   // finally set up the watch!
   if (jshIsPinValid(trig->sensorPin))
-    jshPinWatch(trig->sensorPin, false);
+    jshPinWatch(trig->sensorPin, false, JSPW_NONE);
   trig->sensorPin = pin;
-  jshPinWatch(trig->sensorPin, true);
+  jshPinWatch(trig->sensorPin, true, JSPW_HIGH_SPEED);
 }
 
 /*JSON{
@@ -206,12 +210,9 @@ JsVar *jswrap_trig_getTrigger(JsVarInt num) {
 
   JsVar *obj = jsvNewObject();
   if (!obj) return 0;
-  JsVar *v;
-  v = jsvNewFromFloat(position);
-  jsvUnLock2(jsvAddNamedChild(obj, v, "pos"), v);
-  v = jsvNewFromFloat(jshGetMillisecondsFromTime(tp->pulseLength));
-  jsvUnLock2(jsvAddNamedChild(obj, v, "pulseLength"), v);
-  v = jsvNewEmptyArray();
+  jsvAddNamedChildAndUnLock(obj, jsvNewFromFloat(position), "pos");
+  jsvAddNamedChildAndUnLock(obj, jsvNewFromFloat(jshGetMillisecondsFromTime(tp->pulseLength)), "pulseLength");
+  JsVar *v = jsvNewEmptyArray();
   int i;
   if (v) {
     for (i=0;i<TRIGGERPOINT_TRIGGERS_COUNT;i++)
@@ -219,7 +220,7 @@ JsVar *jswrap_trig_getTrigger(JsVarInt num) {
         jsvArrayPushAndUnLock(v, jsvNewFromPin(tp->pins[i]));
       }
   }
-  jsvUnLock2(jsvAddNamedChild(obj, v, "pins"), v);
+  jsvAddNamedChildAndUnLock(obj, v, "pins");
   return obj;
 }
 
@@ -276,7 +277,7 @@ JsVar* jswrap_trig_getErrorArray() {
       if (errors & i) {
         const char *s = trigGetErrorString(i);
         if (s) {
-          jsvArrayPushAndUnLock(arr, jsvNewFromString(s));
+          jsvArrayPushString(arr);
         }
       }
     }

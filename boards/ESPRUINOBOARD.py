@@ -15,8 +15,8 @@
 
 import pinutils;
 info = {
- 'name' : "Original Espruino Board rev 1.3/1.4",
- 'link' : [ "http://www.espruino.com/Original" ],
+ 'name' : "Original Espruino Board", # rev 1.3/1.4
+ 'link' : [ "https://espruino.com/Original" ],
  'espruino_page_link' : "EspruinoBoard",
  'default_console' : "EV_SERIAL1",
  'default_console_tx' : "A9",
@@ -41,8 +41,11 @@ info = {
      'FILESYSTEM'
    ],
    'makefile' : [
+     'DEFINES+=-DESPR_OFFICIAL_BOARD', # Don't display the donations nag screen
      'DEFINES+=-DESPRUINO_1V3',
      'DEFINES+=-DSAVE_ON_FLASH_MATH', 
+     'DEFINES+=-DESPR_PACKED_SYMPTR', # Pack builtin symbols' offset into pointer to save 2 bytes/symbol
+     'DEFINES += -DESPR_USE_STEPPER_TIMER=1', # Build in the code for stepping using the timer
      'STLIB=STM32F10X_XL',
      'PRECOMPILED_OBJS+=$(ROOT)/targetlibs/stm32f1/lib/startup_stm32f10x_hd.o'
    ]

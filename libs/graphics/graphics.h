@@ -88,6 +88,9 @@ typedef enum {
  JSGRAPHICS_FONTSIZE_CUSTOM_1BPP = 4 << 13,// a custom bitmap font made from fields in the graphics object (See below)
  JSGRAPHICS_FONTSIZE_CUSTOM_2BPP = 5 << 13,// a custom bitmap font made from fields in the graphics object (See below)
  JSGRAPHICS_FONTSIZE_CUSTOM_4BPP = 6 << 13,// a custom bitmap font made from fields in the graphics object (See below)
+#ifdef ESPR_PBF_FONTS
+ JSGRAPHICS_FONTSIZE_CUSTOM_PBF = 7 << 13,// a custom bitmap font using PBF format (in JSGRAPHICS_CUSTOMFONT_BMP)
+#endif // ESPR_PBF_FONTS
  JSGRAPHICS_FONTSIZE_CUSTOM_BIT = 4 << 13 // all custom fonts have this bit set
 #endif
 } JsGraphicsFontSize;
@@ -185,16 +188,21 @@ bool graphicsSetCallbacks(JsGraphics *gfx);
 size_t graphicsGetMemoryRequired(const JsGraphics *gfx);
 // If graphics is flipped or rotated then the coordinates need modifying
 void graphicsToDeviceCoordinates(const JsGraphics *gfx, int *x, int *y);
+// If graphics is flipped or rotated then the coordinates need modifying. This is to go back - eg for touchscreens
+void deviceToGraphicsCoordinates(const JsGraphics *gfx, int *x, int *y);
+
 unsigned short graphicsGetWidth(const JsGraphics *gfx);
 unsigned short graphicsGetHeight(const JsGraphics *gfx);
-// Set the area modified (inclusive of x2,y2) by a draw command and also clip to the screen/clipping bounds. Returns true if clipped
-bool graphicsSetModifiedAndClip(JsGraphics *gfx, int *x1, int *y1, int *x2, int *y2);
+// Set the area modified by a draw command and also clip to the screen/clipping bounds. Returns true if clipped. If coordsRotatedAlready we assume the coordinates have gone through deviceToGraphicsCoordinates already
+bool graphicsSetModifiedAndClip(JsGraphics *gfx, int *x1, int *y1, int *x2, int *y2, bool coordsRotatedAlready);
 // Set the area modified by a draw command
 void graphicsSetModified(JsGraphics *gfx, int x1, int y1, int x2, int y2);
 /// Get a setPixel function (assuming coordinates already clipped with graphicsSetModifiedAndClip) - if all is ok it can choose a faster draw function
 JsGraphicsSetPixelFn graphicsGetSetPixelFn(JsGraphics *gfx);
 /// Get a setPixel function and set modified area (assuming no clipping) (inclusive of x2,y2) - if all is ok it can choose a faster draw function
-JsGraphicsSetPixelFn graphicsGetSetPixelUnclippedFn(JsGraphics *gfx, int x1, int y1, int x2, int y2);
+JsGraphicsSetPixelFn graphicsGetSetPixelUnclippedFn(JsGraphics *gfx, int x1, int y1, int x2, int y2, bool coordsRotatedAlready);
+/// Merge one color into another based RGB565(amt is 0..256)
+uint16_t graphicsBlendColorRGB565(uint16_t fg, uint16_t bg, int iamt);
 /// Merge one color into another based on current bit depth (amt is 0..256)
 uint32_t graphicsBlendColor(JsGraphics *gfx, unsigned int fg, unsigned int bg, int iamt);
 /// Merge one color into another based on current bit depth (amt is 0..256)
@@ -216,8 +224,6 @@ void graphicsDrawLine(JsGraphics *gfx, int x1, int y1, int x2, int y2);
 void graphicsDrawLineAA(JsGraphics *gfx, int ix1, int iy1, int ix2, int iy2); ///< antialiased drawline. each pixel is 1/16th
 void graphicsDrawCircleAA(JsGraphics *gfx, int x, int y, int r);
 void graphicsFillPoly(JsGraphics *gfx, int points, short *vertices); ///< each pixel is 1/16th a pixel may overwrite vertices...
-/// Draw a simple 1bpp image in foreground colour
-void graphicsDrawImage1bpp(JsGraphics *gfx, int x1, int y1, int width, int height, const unsigned char *pixelData);
 /// Scroll the graphics device (in user coords). X>0 = to right, Y >0 = down
 void graphicsScroll(JsGraphics *gfx, int xdir, int ydir);
 
@@ -228,5 +234,8 @@ void graphicsIdle(); ///< called when idling
 #define GRAPHICS_COL_16_TO_3(x) ((((x)&0x8000)?4:0)|(((x)&0x0400)?2:0)|(((x)&0x0010)?1:0))
 #define GRAPHICS_COL_3_TO_16(x) ((((x)&4)?0xF800:0)|(((x)&2)?0x07E0:0)|(((x)&1)?0x001F:0))
 #define GRAPHICS_COL_RGB_TO_16(R,G,B) ((((R)&0xF8)<<8)|(((G)&0xFC)<<3)|(((B)&0xF8)>>3))
+
+void graphicsFallbackSetPixel(JsGraphics *gfx, int x, int y, unsigned int col); ///< Does nothing, used when not implemented
+unsigned int graphicsFallbackGetPixel(JsGraphics *gfx, int x, int y); ///< Does nothing, used when not implemented
 
 #endif // GRAPHICS_H

@@ -11,6 +11,10 @@
  * JavaScript methods for Espruino utility functions
  * ----------------------------------------------------------------------------
  */
+
+#ifndef JSWRAP_ESPRUINO_H_
+#define JSWRAP_ESPRUINO_H_
+
 #include "jsvar.h"
 #include "jshardware.h"
 #include "jsflags.h" // for E.get/setFlags
@@ -26,16 +30,23 @@ void jswrap_espruino_FFT(JsVar *arrReal, JsVar *arrImag, bool inverse);
 
 void jswrap_espruino_enableWatchdog(JsVarFloat time, JsVar *isAuto);
 void jswrap_espruino_kickWatchdog();
+void jswrap_espruino_setComparator_eventHandler(IOEventFlags eventFlags, uint8_t *data, int length);
+void jswrap_espruino_setComparator(Pin pin, JsVarFloat level);
 /// Return an array of errors based on the current flags
 JsVar *jswrap_espruino_getErrorFlagArray(JsErrorFlags flags);
 JsVar *jswrap_espruino_getErrorFlags();
 JsVar *jswrap_espruino_toArrayBuffer(JsVar *str);
 JsVar *jswrap_espruino_toUint8Array(JsVar *args);
 JsVar *jswrap_espruino_toString(JsVar *args);
+JsVar *jswrap_espruino_toFlatString(JsVar *args);
+JsVar *jswrap_espruino_asUTF8(JsVar *str);
+JsVar *jswrap_espruino_fromUTF8(JsVar *str);
+bool jswrap_espruino_isUTF8(JsVar *str);
 JsVar *jswrap_espruino_toJS(JsVar *v);
 JsVar *jswrap_espruino_memoryArea(int addr, int len);
 void jswrap_espruino_setBootCode(JsVar *code, bool alwaysExec);
 int jswrap_espruino_setClock(JsVar *options);
+JsVar *jswrap_espruino_getClock();
 void jswrap_espruino_setConsole(JsVar *device, JsVar *options);
 JsVar *jswrap_espruino_getConsole();
 
@@ -51,14 +62,18 @@ void jswrap_espruino_mapInPlace(JsVar *from, JsVar *to, JsVar *map, JsVarInt bit
 JsVar *jswrap_espruino_lookupNoCase(JsVar *haystack, JsVar *needle, bool returnKey);
 JsVar *jswrap_e_dumpStr();
 JsVar *jswrap_espruino_CRC32(JsVar *data);
-JsVar *jswrap_espruino_HSBtoRGB(JsVarFloat hue, JsVarFloat sat, JsVarFloat bri, bool asArray);
+JsVar *jswrap_espruino_HSBtoRGB(JsVarFloat hue, JsVarFloat sat, JsVarFloat bri, int format);
 void jswrap_espruino_setPassword(JsVar *pwd);
 void jswrap_espruino_lockConsole();
 void jswrap_espruino_setTimeZone(JsVarFloat zone);
+#ifndef ESPR_NO_DAYLIGHT_SAVING
+void jswrap_espruino_setDST(JsVar *params);
+#endif
 JsVar *jswrap_espruino_memoryMap(JsVar *baseAddress, JsVar *registers);
 void jswrap_espruino_asm(JsVar *callspec, JsVar *args);
 void jswrap_espruino_compiledC(JsVar *code);
 void jswrap_espruino_reboot();
+void jswrap_espruino_rebootToDFU();
 
 void jswrap_espruino_setUSBHID(JsVar *arr);
 bool jswrap_espruino_sendUSBHID(JsVar *arr);
@@ -66,4 +81,8 @@ bool jswrap_espruino_sendUSBHID(JsVar *arr);
 JsVarInt jswrap_espruino_getBattery();
 void jswrap_espruino_setRTCPrescaler(int prescale);
 int jswrap_espruino_getRTCPrescaler(bool calibrate);
+JsVar *jswrap_espruino_getPowerUsage();
 JsVar *jswrap_espruino_decodeUTF8(JsVar *str, JsVar *lookup, JsVar *replaceFn);
+void jswrap_espruino_stopEventPropagation();
+
+#endif // JSWRAP_ESPRUINO_H_

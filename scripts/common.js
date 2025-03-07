@@ -25,11 +25,11 @@ Builtin.prototype.getDescription = function() {
 };
 
 Builtin.prototype.getURL = function() {
-  if (this.type == "class")
+  if (this.type == "class" || this.type == "library")
     anchor = this.class;
   else if ("class" in this)
     anchor = "l_"+this.class+"_"+this.name;
-  else 
+  else
     anchor = "l__global_"+this.name;
   return "http://www.espruino.com/Reference#"+anchor;
 };
@@ -44,12 +44,12 @@ function getBasicTernType(t) {
 }
 
 /// Get full Tern type - for tern.js json format
-Builtin.prototype.getTernType = function() { 
+Builtin.prototype.getTernType = function() {
   if (["class","library"].indexOf(this.type)>=0) {
     return "fn()";
   } else if (["function","method","staticmethod","constructor"].indexOf(this.type)>=0) {
     // it's a function
-    var args = [];     
+    var args = [];
     if ("params" in this)
       args = this.params.map(function (p) {
         if (p[0]=="pin" && p[1]=="JsVar")
@@ -59,8 +59,8 @@ Builtin.prototype.getTernType = function() {
     var ret = "";
     if ("return_object" in this)
       ret = " -> +"+this.return_object
-    else if ("return" in this) 
-      ret = " -> "+getBasicTernType(this.return[0]); 
+    else if ("return" in this)
+      ret = " -> "+getBasicTernType(this.return[0]);
     return "fn("+args.join("\, ")+")"+ret;
   } else {
     return getBasicTernType(this.return[0]);
@@ -78,29 +78,57 @@ exports.getWrapperFiles = function (callback) {
 /// Extract the /*JSON ... */ comments from a file and parse them
 exports.readWrapperFile = function(filename) {
   var contents = fs.readFileSync(filename).toString();
+  if (contents.includes("DO_NOT_INCLUDE_IN_DOCS")) {
+    return [[],[]]; // don't include jswrap files with the no-docs marker in them
+  }
   var builtins = [];
+  var types = [];
   var comments = contents.match( /\/\*JSON(?:(?!\*\/).|[\n\r])*\*\//g );
   if (comments) comments.forEach(function(comment) {
     comment = comment.slice(6,-2); // pull off /*JSON ... */ bit
     var endOfJson = comment.indexOf("\n}")+2;
     var json = comment.substr(0,endOfJson);
     var description =  comment.substr(endOfJson).trim();
-    var j = new Builtin(JSON.parse(json));
-    if (description.length) j.description = description;
-    j.implementation = filename;
-    builtins.push(j);
+    try {
+      var j = new Builtin(JSON.parse(json));
+      if (description.length) j.description = description;
+      j.implementation = filename;
+      builtins.push(j);
+    } catch(e) {
+      console.log("Error in ", filename);
+      console.log(json);
+      console.log(e);
+    }
   });
-  return builtins;
+  var comments = contents.match( /\/\*TYPESCRIPT(?:(?!\*\/).|[\n\r])*\*\//g );
+  if (comments) comments.forEach(function(comment) {
+    comment = comment.slice(12,-2);
+    var j = {};
+    var declaration = comment;
+    if (comment[0] === "{") {
+      var endOfJson = comment.indexOf("\n}")+2;
+      var json = comment.substr(0,endOfJson);
+      j = new Builtin(JSON.parse(json));
+      declaration =  comment.substr(endOfJson).trim();
+    }
+    j.declaration = declaration;
+    j.implementation = filename;
+    types.push(j);
+  });
+  return [builtins, types];
 }
 
 /// Extract all parsed /*JSON ... */ comments from all files
 exports.readAllWrapperFiles = function(callback) {
   exports.getWrapperFiles(function(files) {
     var builtins = [];
+    var types = [];
     files.forEach(function(filename) {
-      builtins = builtins.concat(exports.readWrapperFile(filename));
+      var [b, t] = exports.readWrapperFile(filename);
+      builtins = builtins.concat(b);
+      types = types.concat(t);
     });
-    callback(builtins);
+    callback(builtins, types);
   });
 }
 

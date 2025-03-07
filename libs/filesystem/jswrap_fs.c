@@ -35,19 +35,23 @@
   "type" : "library",
   "class" : "fs"
 }
-This library handles interfacing with a FAT32 filesystem on an SD card. The API is designed to be similar to node.js's - However Espruino does not currently support asynchronous file IO, so the functions behave like node.js's xxxxSync functions. Versions of the functions with 'Sync' after them are also provided for compatibility.
+This library handles interfacing with a FAT32 filesystem on an SD card. The API
+is designed to be similar to node.js's - However Espruino does not currently
+support asynchronous file IO, so the functions behave like node.js's xxxxSync
+functions. Versions of the functions with 'Sync' after them are also provided
+for compatibility.
 
-To use this, you must type ```var fs = require('fs')``` to get access to the library
+To use this, you must type ```var fs = require('fs')``` to get access to the
+library
 
-See [the page on File IO](http://www.espruino.com/File+IO) for more information, and for examples on wiring up an SD card if your device doesn't come with one.
+See [the page on File IO](http://www.espruino.com/File+IO) for more information,
+and for examples on wiring up an SD card if your device doesn't come with one.
 
-**Note:** If you want to remove an SD card after you have started using it, you *must* call `E.unmountSD()` or you may cause damage to the card.
+**Note:** If you want to remove an SD card after you have started using it, you
+*must* call `E.unmountSD()` or you may cause damage to the card.
 */
 
-#ifndef LINUX
-#define JS_DIR_BUF_SIZE 64
-#else
-#define JS_DIR_BUF_SIZE 256
+#ifdef LINUX
 #define FR_OK (0)
 #endif
 
@@ -62,8 +66,6 @@ See [the page on File IO](http://www.espruino.com/File+IO) for more information,
 #endif
 
 // from jswrap_file
-bool jsfsGetPathString(char *pathStr, JsVar *path);
-extern bool jsfsInit();
 extern void jsfsReportError(const char *msg, FRESULT res);
 
 /*JSON{
@@ -78,7 +80,8 @@ extern void jsfsReportError(const char *msg, FRESULT res);
 }
 List all files in the supplied directory, returning them as an array of strings.
 
-NOTE: Espruino does not yet support Async file IO, so this function behaves like the 'Sync' version.
+NOTE: Espruino does not yet support Async file IO, so this function behaves like
+the 'Sync' version.
 */
 /*JSON{
   "type" : "staticmethod",
@@ -104,7 +107,7 @@ JsVar *jswrap_fs_readdir(JsVar *path) {
   if (!pathStr[0]) strcpy(pathStr, "."); // deal with empty readdir
 #endif
 
-  FRESULT res = 0;
+  FRESULT res = 0; // leave readdir to return 'undefined' on PipBoy if jsfsInit fails (on other devices it'll throw an exception anyway)
   if (jsfsInit()) {
 #ifndef LINUX
     DIR dirs;
@@ -160,7 +163,8 @@ JsVar *jswrap_fs_readdir(JsVar *path) {
 }
 Write the data to the given file
 
-NOTE: Espruino does not yet support Async file IO, so this function behaves like the 'Sync' version.
+NOTE: Espruino does not yet support Async file IO, so this function behaves like
+the 'Sync' version.
 */
 /*JSON{
   "type" : "staticmethod",
@@ -189,7 +193,8 @@ Write the data to the given file
 }
 Append the data to the given file, created a new file if it doesn't exist
 
-NOTE: Espruino does not yet support Async file IO, so this function behaves like the 'Sync' version.
+NOTE: Espruino does not yet support Async file IO, so this function behaves like
+the 'Sync' version.
 */
 /*JSON{
   "type" : "staticmethod",
@@ -229,7 +234,8 @@ bool jswrap_fs_writeOrAppendFile(JsVar *path, JsVar *data, bool append) {
 }
 Read all data from a file and return as a string
 
-NOTE: Espruino does not yet support Async file IO, so this function behaves like the 'Sync' version.
+NOTE: Espruino does not yet support Async file IO, so this function behaves like
+the 'Sync' version.
 */
 /*JSON{
   "type" : "staticmethod",
@@ -244,7 +250,8 @@ NOTE: Espruino does not yet support Async file IO, so this function behaves like
 }
 Read all data from a file and return as a string.
 
-**Note:** The size of files you can load using this method is limited by the amount of available RAM. To read files a bit at a time, see the `File` class.
+**Note:** The size of files you can load using this method is limited by the
+amount of available RAM. To read files a bit at a time, see the `File` class.
 */
 JsVar *jswrap_fs_readFile(JsVar *path) {
   JsVar *fMode = jsvNewFromString("r");
@@ -270,7 +277,8 @@ JsVar *jswrap_fs_readFile(JsVar *path) {
 }
 Delete the given file
 
-NOTE: Espruino does not yet support Async file IO, so this function behaves like the 'Sync' version.
+NOTE: Espruino does not yet support Async file IO, so this function behaves like
+the 'Sync' version.
 */
 /*JSON{
   "type" : "staticmethod",
@@ -291,7 +299,7 @@ bool jswrap_fs_unlink(JsVar *path) {
     if (!jsfsGetPathString(pathStr, path)) return 0;
 
 #ifndef LINUX
-  FRESULT res = 0;
+  FRESULT res = FR_DISK_ERR;
   if (jsfsInit()) {
     res = f_unlink(pathStr);
   }
@@ -320,8 +328,7 @@ bool jswrap_fs_unlink(JsVar *path) {
 Return information on the given file. This returns an object with the following
 fields:
 
-size: size in bytes
-dir: a boolean specifying if the file is a directory or not
+size: size in bytes dir: a boolean specifying if the file is a directory or not
 mtime: A Date structure specifying the time the file was last modified
 */
 JsVar *jswrap_fs_stat(JsVar *path) {
@@ -330,7 +337,7 @@ JsVar *jswrap_fs_stat(JsVar *path) {
     if (!jsfsGetPathString(pathStr, path)) return 0;
 
 #ifndef LINUX
-  FRESULT res = 0;
+  FRESULT res = FR_DISK_ERR;
   if (jsfsInit()) {
     FILINFO info;
     memset(&info,0,sizeof(info));
@@ -346,12 +353,12 @@ JsVar *jswrap_fs_stat(JsVar *path) {
       date.month = (int)(((info.fdate>>5)&15)-1);  // TomWS: Month is 0 based.
       date.day = (int)((info.fdate)&31);
       TimeInDay td;
-      td.daysSinceEpoch = fromCalenderDate(&date);
+      td.daysSinceEpoch = fromCalendarDate(&date);
       td.hour = (int)((info.ftime>>11)&31);
       td.min = (int)((info.ftime>>5)&63);
       td.sec = (int)((info.ftime)&63);
       td.ms = 0;
-      td.zone = jsdGetTimeZone();  // TomWS: add adjustment for timezone offset introduced in date_from_milliseconds 
+      setCorrectTimeZone(&td);  // TomWS: add adjustment for timezone offset introduced in date_from_milliseconds
       jsvObjectSetChildAndUnLock(obj, "mtime", jswrap_date_from_milliseconds(fromTimeInDay(&td)));
       return obj;
     }
@@ -371,6 +378,66 @@ JsVar *jswrap_fs_stat(JsVar *path) {
   return 0;
 }
 
+/*JSON{
+  "type" : "staticmethod",
+  "class" : "fs",
+  "name" : "getFree",
+  "ifdef" : "ESPR_FS_GETFREE",
+  "generate" : "jswrap_fs_getfree",
+  "params" : [
+    ["path","JsVar","The path specifying the logical drive"]
+  ],
+  "return" : ["JsVar","An object describing the drive, or undefined on failure"]
+}
+Get the number of free sectors on the volume. This returns an object with the following
+fields:
+
+freeSectors: the number of free sectors
+totalSectors: the total number of sectors on the volume
+sectorSize: the number of bytes per sector
+clusterSize: the number of sectors per cluster
+*/
+JsVar *jswrap_fs_getfree(JsVar *path) {
+  char pathStr[JS_DIR_BUF_SIZE] = "";
+  if (!jsvIsUndefined(path))
+    if (!jsfsGetPathString(pathStr, path)) return 0;
+
+#ifndef LINUX
+  FRESULT res = FR_DISK_ERR;
+  if (jsfsInit()) {
+    FATFS *fs;
+    DWORD fre_clust, fre_sect, tot_sect, sect_size;
+    // Get volume information and free clusters
+    res = f_getfree(pathStr, &fre_clust, &fs);
+    if (res==0 /*ok*/) {
+      JsVar *obj = jsvNewObject();
+      if (!obj) return 0;
+      // Get total sectors and free sectors
+      tot_sect = (fs->n_fatent - 2) * fs->csize;
+      fre_sect = fre_clust * fs->csize;
+#ifndef FF_MAX_SS // compat with older fatfs
+#define FF_MAX_SS _MAX_SS
+#define FF_MIN_SS _MIN_SS
+#endif
+#if FF_MAX_SS != FF_MIN_SS
+      sect_size = fs->ssize;
+#else
+      sect_size = FF_MIN_SS;
+#endif
+      jsvObjectSetChildAndUnLock(obj, "freeSectors", jsvNewFromInteger((JsVarInt)fre_sect));
+      jsvObjectSetChildAndUnLock(obj, "totalSectors", jsvNewFromInteger((JsVarInt)tot_sect));
+      jsvObjectSetChildAndUnLock(obj, "sectorSize", jsvNewFromInteger((JsVarInt)sect_size));
+      jsvObjectSetChildAndUnLock(obj, "clusterSize", jsvNewFromInteger((JsVarInt)fs->csize));
+      return obj;
+    }
+  }
+#else
+  // @TODO: Implement something for Linux...?
+#endif
+
+  return 0;
+}
+
   /*JSON{
   "type" : "staticmethod",
   "class" : "fs",
@@ -384,7 +451,8 @@ JsVar *jswrap_fs_stat(JsVar *path) {
 }
 Create the directory
 
-NOTE: Espruino does not yet support Async file IO, so this function behaves like the 'Sync' version.
+NOTE: Espruino does not yet support Async file IO, so this function behaves like
+the 'Sync' version.
 */
 /*JSON{
   "type" : "staticmethod",
@@ -405,7 +473,7 @@ bool jswrap_fs_mkdir(JsVar *path) {
     if (!jsfsGetPathString(pathStr, path)) return 0;
 
 #ifndef LINUX
-  FRESULT res = 0;
+  FRESULT res = FR_DISK_ERR;
   if (jsfsInit()) {
     res = f_mkdir(pathStr);
   }
@@ -419,3 +487,41 @@ bool jswrap_fs_mkdir(JsVar *path) {
   }
   return true;
 }
+
+/*JSON{
+  "type" : "staticmethod",
+  "class" : "fs",
+  "name" : "mkfs",
+  "ifdef" : "ESPR_FS_MKFS",
+  "generate" : "jswrap_fs_mkfs",
+  "return" : ["bool","True on success, or false on failure"]
+}
+Reformat the connected media to a FAT filesystem
+*/
+bool jswrap_fs_mkfs() {
+#ifndef LINUX
+  FRESULT res = FR_DISK_ERR;
+  // ensure hardware inited. Ignore return value as we're formatting
+  jsfsInit();
+  // de-init software (but not hardware - we need to ensure open files are closed)
+  jswrap_file_kill_sw();
+  // Reformat
+  uint8_t workBuffer[FF_MAX_SS];
+  #if  _FATFS==80376
+  res = f_mkfs("", 0, 0); // R0.10 args format (FDISK format, auto alloc size)
+  #else
+  res = f_mkfs("", NULL, workBuffer, sizeof(workBuffer));
+  #endif
+  if (res) {
+    jsfsReportError("mkfs error", res);
+    return false;
+  }
+  return jsfsInit();
+#else
+  jsExceptionHere(JSET_ERROR, "fs.mkfs not implemented on Linux");
+  return false;
+#endif
+
+
+}
+

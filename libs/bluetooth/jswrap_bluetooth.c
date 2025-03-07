@@ -60,8 +60,11 @@
 // ------------------------------------------------------------------------------
 // ------------------------------------------------------------------------------
 
+#if ESPR_NO_PROMISES!=1
 JsVar *blePromise = 0;
+#endif
 JsVar *bleTaskInfo = 0;
+JsVar *bleTaskInfo2 = 0;
 BleTask bleTask = BLETASK_NONE;
 
 /// Get the string value of the given task
@@ -101,10 +104,13 @@ bool bleNewTask(BleTask task, JsVar *taskInfo) {
     jsiConsolePrintf("Existing bleTaskInfo!\n");
     jsvTrace(bleTaskInfo,2);
   }*/
-  assert(!blePromise && !bleTaskInfo);
+#if ESPR_NO_PROMISES!=1
+  assert(!blePromise && !bleTaskInfo && !bleTaskInfo2);
   blePromise = jspromise_create();
+#endif
   bleTask = task;
   bleTaskInfo = jsvLockAgainSafe(taskInfo);
+  bleTaskInfo2 = NULL;
   return true;
 }
 
@@ -115,14 +121,18 @@ void bleCompleteTask(BleTask task, bool ok, JsVar *data) {
     return;
   }
   bleTask = BLETASK_NONE;
+#if ESPR_NO_PROMISES!=1
   if (blePromise) {
     if (ok) jspromise_resolve(blePromise, data);
     else jspromise_reject(blePromise, data);
     jsvUnLock(blePromise);
     blePromise = 0;
   }
+#endif
   jsvUnLock(bleTaskInfo);
   bleTaskInfo = 0;
+  jsvUnLock(bleTaskInfo2);
+  bleTaskInfo2 = 0;
   jshHadEvent();
 }
 
@@ -146,13 +156,45 @@ void bleSwitchTask(BleTask task) {
 
 // ------------------------------------------------------------------------------
 // ------------------------------------------------------------------------------
-#ifdef NRF52_SERIES
-void bleSetActiveBluetoothGattServer(JsVar *var) {
-  jsvObjectSetChild(execInfo.hiddenRoot, BLE_NAME_GATT_SERVER, var);
+#if CENTRAL_LINK_COUNT>0
+void bleSetActiveBluetoothGattServer(int idx, JsVar *var) {
+  assert(idx >=0 && idx < CENTRAL_LINK_COUNT);
+  if (idx<0) return;
+  char name[BLE_NAME_GATT_SERVER_LEN] = BLE_NAME_GATT_SERVER;
+  name[BLE_NAME_GATT_SERVER_LEN-2] = '0'+idx;
+  jsvObjectSetChild(execInfo.hiddenRoot, name, var);
 }
 
-JsVar *bleGetActiveBluetoothGattServer() {
-  return jsvObjectGetChild(execInfo.hiddenRoot, BLE_NAME_GATT_SERVER, 0);
+JsVar *bleGetActiveBluetoothGattServer(int idx) {
+  assert(idx < CENTRAL_LINK_COUNT);
+  if (idx<0) return 0;
+  char name[BLE_NAME_GATT_SERVER_LEN] = BLE_NAME_GATT_SERVER;
+  name[BLE_NAME_GATT_SERVER_LEN-2] = '0'+idx;
+  return jsvObjectGetChildIfExists(execInfo.hiddenRoot, name);
+}
+
+uint16_t jswrap_ble_BluetoothRemoteGATTServer_getHandle(JsVar *parent) {
+  JsVar *handle = jsvObjectGetChildIfExists(parent, "handle");
+  if (!jsvIsInt(handle)) return BLE_CONN_HANDLE_INVALID;
+  return jsvGetIntegerAndUnLock(handle);
+}
+uint16_t jswrap_ble_BluetoothDevice_getHandle(JsVar *parent) {
+  JsVar *gatt = jswrap_BluetoothDevice_gatt(parent);
+  uint16_t handle = BLE_CONN_HANDLE_INVALID;
+  if (gatt) handle = jswrap_ble_BluetoothRemoteGATTServer_getHandle(gatt);
+  return handle;
+}
+uint16_t jswrap_ble_BluetoothRemoteGATTService_getHandle(JsVar *parent) {
+  JsVar *device = jsvObjectGetChildIfExists(parent, "device");
+  uint16_t handle = BLE_CONN_HANDLE_INVALID;
+  if (device) handle = jswrap_ble_BluetoothDevice_getHandle(device);
+  return handle;
+}
+uint16_t jswrap_ble_BluetoothRemoteGATTCharacteristic_getHandle(JsVar *parent) {
+  JsVar *service = jsvObjectGetChildIfExists(parent, "service");
+  uint16_t handle = BLE_CONN_HANDLE_INVALID;
+  if (service) handle = jswrap_ble_BluetoothRemoteGATTService_getHandle(service);
+  return handle;
 }
 #endif
 // ------------------------------------------------------------------------------
@@ -171,7 +213,7 @@ void jswrap_ble_init() {
 #if defined(USE_NFC) && defined(NFC_DEFAULT_URL)
     // By default Puck.js's NFC will send you to the PuckJS website
     // address is included so Web Bluetooth can connect to the correct one
-    JsVar *addr = jswrap_ble_getAddress();
+    JsVar *addr = jswrap_ble_getAddress(false);
     JsVar *uri = jsvVarPrintf(NFC_DEFAULT_URL"?a=%v", addr);
     jsvUnLock(addr);
     jswrap_nfc_URL(uri);
@@ -180,7 +222,7 @@ void jswrap_ble_init() {
   } else {
 #ifdef USE_NFC
     // start NFC, if it had been set
-    JsVar *flatStr = jsvObjectGetChild(execInfo.hiddenRoot, "NfcEnabled", 0);
+    JsVar *flatStr = jsvObjectGetChildIfExists(execInfo.hiddenRoot, "NfcEnabled");
     if (flatStr) {
       uint8_t *flatStrPtr = (uint8_t*)jsvGetFlatStringPointer(flatStr);
       if (flatStrPtr) jsble_nfc_start(flatStrPtr, jsvGetLength(flatStr));
@@ -198,30 +240,27 @@ void jswrap_ble_init() {
 void jswrap_ble_reconfigure_softdevice() {
   JsVar *v,*o;
   // restart various
-  v = jsvObjectGetChild(execInfo.root, BLE_SCAN_EVENT,0);
-  if (v) jsble_set_scanning(true, false);
+  v = jsvObjectGetChildIfExists(execInfo.root, BLE_SCAN_EVENT);
+  if (v) jsble_set_scanning(true, NULL);
   jsvUnLock(v);
-  v = jsvObjectGetChild(execInfo.root, BLE_RSSI_EVENT,0);
+  v = jsvObjectGetChildIfExists(execInfo.root, BLE_RSSI_EVENT);
   if (v) jsble_set_rssi_scan(true);
   jsvUnLock(v);
   // advertising
-  v = jsvObjectGetChild(execInfo.hiddenRoot, BLE_NAME_ADVERTISE_DATA, 0);
-  o = jsvObjectGetChild(execInfo.hiddenRoot, BLE_NAME_ADVERTISE_OPTIONS, 0);
+  v = jsvObjectGetChildIfExists(execInfo.hiddenRoot, BLE_NAME_ADVERTISE_DATA);
+  o = jsvObjectGetChildIfExists(execInfo.hiddenRoot, BLE_NAME_ADVERTISE_OPTIONS);
   jswrap_ble_setAdvertising(v, o);
   jsvUnLock2(v,o);
   // services
-  v = jsvObjectGetChild(execInfo.hiddenRoot, BLE_NAME_SERVICE_DATA, 0);
+  v = jsvObjectGetChildIfExists(execInfo.hiddenRoot, BLE_NAME_SERVICE_DATA);
   jsble_set_services(v);
   jsvUnLock(v);
   // If we had scan response data set, update it
-  JsVar *scanData = jsvObjectGetChild(execInfo.hiddenRoot, BLE_NAME_SCAN_RESPONSE_DATA, 0);
+  JsVar *scanData = jsvObjectGetChildIfExists(execInfo.hiddenRoot, BLE_NAME_SCAN_RESPONSE_DATA);
   if (scanData) jswrap_ble_setScanResponse(scanData);
   jsvUnLock(scanData);
   // Set up security related stuff
   jsble_update_security();
-  // If not awake, wake up
-  if (bleStatus & BLE_IS_SLEEPING)
-    jswrap_ble_wake();
 }
 
 /*JSON{
@@ -243,19 +282,23 @@ void jswrap_ble_kill() {
 #endif
   // stop any BLE tasks
   bleTask = BLETASK_NONE;
+#if ESPR_NO_PROMISES!=1
   if (blePromise) jsvUnLock(blePromise);
   blePromise = 0;
+#endif
   if (bleTaskInfo) jsvUnLock(bleTaskInfo);
   bleTaskInfo = 0;
+  if (bleTaskInfo2) jsvUnLock(bleTaskInfo2);
+  bleTaskInfo2 = 0;
   // if we were scanning, make sure we stop
-  jsble_set_scanning(false, false);
+  jsble_set_scanning(false, NULL);
   jsble_set_rssi_scan(false);
 
 #if CENTRAL_LINK_COUNT>0
   // if we were connected to something, disconnect
-  if (jsble_has_central_connection()) {
-    jsble_disconnect(m_central_conn_handle);
-  }
+  for (int i=0;i<CENTRAL_LINK_COUNT;i++)
+    if (m_central_conn_handles[i] != BLE_CONN_HANDLE_INVALID)
+      jsble_disconnect(m_central_conn_handles[i]);
 #endif
 }
 
@@ -263,14 +306,14 @@ void jswrap_ble_dumpBluetoothInitialisation(vcbprintf_callback user_callback, vo
 
 
   JsVar *v,*o;
-  v = jsvObjectGetChild(execInfo.root, BLE_SCAN_EVENT,0);
+  v = jsvObjectGetChildIfExists(execInfo.root, BLE_SCAN_EVENT);
   if (v) {
     user_callback("NRF.setScan(", user_data);
     jsiDumpJSON(user_callback, user_data, v, 0);
     user_callback(");\n", user_data);
   }
   jsvUnLock(v);
-  v = jsvObjectGetChild(execInfo.root, BLE_RSSI_EVENT,0);
+  v = jsvObjectGetChildIfExists(execInfo.root, BLE_RSSI_EVENT);
   if (v) {
     user_callback("NRF.setRSSIHandler(", user_data);
     jsiDumpJSON(user_callback, user_data, v, 0);
@@ -278,24 +321,24 @@ void jswrap_ble_dumpBluetoothInitialisation(vcbprintf_callback user_callback, vo
   }
   jsvUnLock(v);
   // advertising
-  v = jsvObjectGetChild(execInfo.hiddenRoot, BLE_NAME_ADVERTISE_DATA, 0);
-  o = jsvObjectGetChild(execInfo.hiddenRoot, BLE_NAME_ADVERTISE_OPTIONS, 0);
+  v = jsvObjectGetChildIfExists(execInfo.hiddenRoot, BLE_NAME_ADVERTISE_DATA);
+  o = jsvObjectGetChildIfExists(execInfo.hiddenRoot, BLE_NAME_ADVERTISE_OPTIONS);
   if (v || o)
     cbprintf(user_callback, user_data, "NRF.setAdvertising(%j, %j);\n",v,o);
   jsvUnLock2(v,o);
   // services
-  v = jsvObjectGetChild(execInfo.hiddenRoot, BLE_NAME_SERVICE_DATA, 0);
-  o = jsvObjectGetChild(execInfo.hiddenRoot, BLE_NAME_SERVICE_OPTIONS, 0);
+  v = jsvObjectGetChildIfExists(execInfo.hiddenRoot, BLE_NAME_SERVICE_DATA);
+  o = jsvObjectGetChildIfExists(execInfo.hiddenRoot, BLE_NAME_SERVICE_OPTIONS);
   if (v || o)
     cbprintf(user_callback, user_data, "NRF.setServices(%j, %j);\n",v,o);
   jsvUnLock2(v,o);
   // security
-  v = jsvObjectGetChild(execInfo.hiddenRoot, BLE_NAME_SECURITY, 0);
+  v = jsvObjectGetChildIfExists(execInfo.hiddenRoot, BLE_NAME_SECURITY);
   if (v)
     cbprintf(user_callback, user_data, "NRF.setSecurity(%j);\n",v);
   jsvUnLock(v);
   // mac address
-  v = jsvObjectGetChild(execInfo.hiddenRoot, BLE_NAME_MAC_ADDRESS, 0);
+  v = jsvObjectGetChildIfExists(execInfo.hiddenRoot, BLE_NAME_MAC_ADDRESS);
   if (v)
     cbprintf(user_callback, user_data, "NRF.setAddress(%j);\n",v);
   jsvUnLock(v);
@@ -305,12 +348,13 @@ void jswrap_ble_dumpBluetoothInitialisation(vcbprintf_callback user_callback, vo
 // ------------------------------------------------------------------------------
 
 /*JSON{
-    "type": "class",
+    "type" : "class",
     "class" : "NRF"
 }
 The NRF class is for controlling functionality of the Nordic nRF51/nRF52 chips.
 
-Most functionality is related to Bluetooth Low Energy, however there are also some functions related to NFC that apply to NRF52-based devices.
+Most functionality is related to Bluetooth Low Energy, however there are also
+some functions related to NFC that apply to NRF52-based devices.
 
 */
 
@@ -325,7 +369,8 @@ Most functionality is related to Bluetooth Low Energy, however there are also so
     ["addr","JsVar","The address of the device that has connected"]
   ]
 }
-Called when a host device connects to Espruino. The first argument contains the address.
+Called when a host device connects to Espruino. The first argument contains the
+address.
  */
 /*JSON{
   "type" : "event",
@@ -344,9 +389,47 @@ The most common reason is:
 /*JSON{
   "type" : "event",
   "class" : "NRF",
+  "name" : "error",
+  "#if" : "defined(NRF52_SERIES)",
+  "params" : [
+    ["msg","JsVar","The error string"]
+  ]
+}
+Called when the Nordic Bluetooth stack (softdevice) generates an error. In pretty
+much all cases an Exception will also have been thrown.
+*/
+/*JSON{
+  "type" : "event",
+  "class" : "NRF",
+  "name" : "passkey",
+  "ifdef" : "NRF52_SERIES",
+  "params" : [
+    ["passkey","JsVar","A 6 character numeric String to be displayed"]
+  ]
+}
+(Added in 2v19) Called when a central device connects to Espruino, pairs, and sends a passkey that Espruino should display.
+
+For this to be used, you'll have to specify that your device has a display using `NRF.setSecurity({mitm:1, display:1});`
+
+For instance:
+
+```
+NRF.setSecurity({mitm:1, display:1});
+NRF.on("passkey", key => print("Enter PIN: ",passkey));
+```
+
+It is also possible to specify a static passkey with `NRF.setSecurity({passkey:"123456", mitm:1, display:1});`
+in which case no `passkey` event handler is needed (this method works on Espruino 2v02 and later)
+
+**Note:** A similar event, [`BluetoothDevice.on("passkey", ...)`](http://www.espruino.com/Reference#l_BluetoothDevice_passkey) is available
+for when Espruino is connecting *to* another device (central mode).
+*/
+/*JSON{
+  "type" : "event",
+  "class" : "NRF",
   "name" : "security",
   "params" : [
-    ["status","JsVar","An object containing `{auth_status,bonded,lv4,kdist_own,kdist_peer}"]
+    ["status","JsVar","An object containing `{auth_status,bonded,lv4,kdist_own,kdist_peer}`"]
   ]
 }
 Contains updates on the security of the current Bluetooth link.
@@ -356,13 +439,41 @@ See Nordic's `ble_gap_evt_auth_status_t` structure for more information.
 /*JSON{
   "type" : "event",
   "class" : "NRF",
+  "name" : "advertising",
+  "#if" : "defined(NRF52_SERIES)",
+  "params" : [
+    ["isAdvertising","bool","Whether we are advertising or not"]
+  ]
+}
+Called when Bluetooth advertising starts or stops on Espruino
+*/
+/*JSON{
+  "type" : "event",
+  "class" : "NRF",
+  "name" : "bond",
+  "#if" : "defined(NRF52_SERIES)",
+  "params" : [
+    ["status","JsVar","One of `'request'/'start'/'success'/'fail'`"]
+  ]
+}
+Called during the bonding process to update on status
+
+`status` is one of:
+
+* `"request"` - Bonding has been requested in code via `NRF.startBonding`
+* `"start"` - The bonding procedure has started
+* `"success"` - The bonding procedure has succeeded (`NRF.startBonding`'s promise resolves)
+* `"fail"` - The bonding procedure has failed (`NRF.startBonding`'s promise rejects)
+ */
+/*JSON{
+  "type" : "event",
+  "class" : "NRF",
   "name" : "HID",
   "#if" : "defined(NRF52_SERIES)"
 }
-Called with a single byte value when Espruino is set up as
-a HID device and the computer it is connected to sends a
-HID report back to Espruino. This is usually used for handling
-indications such as the Caps Lock LED.
+Called with a single byte value when Espruino is set up as a HID device and the
+computer it is connected to sends a HID report back to Espruino. This is usually
+used for handling indications such as the Caps Lock LED.
  */
 
 /*JSON{
@@ -408,9 +519,9 @@ Called when an NFC field is no longer detected
   ],
   "#if" : "defined(NRF52_SERIES) && defined(USE_NFC)"
 }
-When NFC is started with `NRF.nfcStart`, this is fired
-when NFC data is received. It doesn't get called if
-NFC is started with `NRF.nfcURL` or `NRF.nfcRaw`
+When NFC is started with `NRF.nfcStart`, this is fired when NFC data is
+received. It doesn't get called if NFC is started with `NRF.nfcURL` or
+`NRF.nfcRaw`
  */
 /*JSON{
   "type" : "event",
@@ -423,8 +534,8 @@ NFC is started with `NRF.nfcURL` or `NRF.nfcRaw`
 }
 Called when the device gets disconnected.
 
-To connect and then print `Disconnected` when the device is
-disconnected, just do the following:
+To connect and then print `Disconnected` when the device is disconnected, just
+do the following:
 
 ```
 var gatt;
@@ -450,9 +561,10 @@ NRF.requestDevice(...).then(function(device) {
   "type" : "event",
   "class" : "BluetoothRemoteGATTCharacteristic",
   "name" : "characteristicvaluechanged",
-  "ifdef" : "NRF52_SERIES"
+  "#if" : "defined(NRF52_SERIES) || defined(ESP32)"
 }
-Called when a characteristic's value changes, *after* `BluetoothRemoteGATTCharacteristic.startNotifications` has been called.
+Called when a characteristic's value changes, *after*
+`BluetoothRemoteGATTCharacteristic.startNotifications` has been called.
 
 ```
   ...
@@ -465,8 +577,10 @@ Called when a characteristic's value changes, *after* `BluetoothRemoteGATTCharac
 }).then(...
 ```
 
-The first argument is of the form `{target : BluetoothRemoteGATTCharacteristic}`, and `BluetoothRemoteGATTCharacteristic.value`
-will then contain the new value (as a DataView).
+The first argument is of the form `{target :
+BluetoothRemoteGATTCharacteristic}`, and
+`BluetoothRemoteGATTCharacteristic.value` will then contain the new value (as a
+DataView).
  */
 
 /*JSON{
@@ -475,7 +589,8 @@ will then contain the new value (as a DataView).
   "instanceof" : "Serial",
   "ifdef" : "BLUETOOTH"
 }
-The Bluetooth Serial port - used when data is sent or received over Bluetooth Smart on nRF51/nRF52 chips.
+The Bluetooth Serial port - used when data is sent or received over Bluetooth
+Smart on nRF51/nRF52 chips.
  */
 
 /*JSON{
@@ -500,9 +615,9 @@ void jswrap_ble_disconnect() {
     "name" : "sleep",
     "generate" : "jswrap_ble_sleep"
 }
-Disable Bluetooth advertising and disconnect from any device that
-connected to Puck.js as a peripheral (this won't affect any devices
-that Puck.js initiated connections to).
+Disable Bluetooth advertising and disconnect from any device that connected to
+Puck.js as a peripheral (this won't affect any devices that Puck.js initiated
+connections to).
 
 This makes Puck.js undiscoverable, so it can't be connected to.
 
@@ -524,8 +639,8 @@ void jswrap_ble_sleep() {
     "name" : "wake",
     "generate" : "jswrap_ble_wake"
 }
-Enable Bluetooth advertising (this is enabled by default), which
-allows other devices to discover and connect to Puck.js.
+Enable Bluetooth advertising (this is enabled by default), which allows other
+devices to discover and connect to Puck.js.
 
 Use `NRF.sleep()` to disable advertising.
 */
@@ -540,27 +655,51 @@ void jswrap_ble_wake() {
     "name" : "restart",
     "generate" : "jswrap_ble_restart",
     "params" : [
-      ["callback","JsVar","An optional function to be called while the softdevice is uninitialised. Use with caution - accessing console/bluetooth will almost certainly result in a crash."]
+      ["callback","JsVar","[optional] A function to be called while the softdevice is uninitialised. Use with caution - accessing console/bluetooth will almost certainly result in a crash."]
     ]
 }
-Restart the Bluetooth softdevice (if there is currently a BLE connection,
-it will queue a restart to be done when the connection closes).
+Restart the Bluetooth softdevice (if there is currently a BLE connection, it
+will queue a restart to be done when the connection closes).
 
-You shouldn't need to call this function in normal usage. However, Nordic's
-BLE softdevice has some settings that cannot be reset. For example there
-are only a certain number of unique UUIDs. Once these are all used the
-only option is to restart the softdevice to clear them all out.
+You shouldn't need to call this function in normal usage. However, Nordic's BLE
+softdevice has some settings that cannot be reset. For example there are only a
+certain number of unique UUIDs. Once these are all used the only option is to
+restart the softdevice to clear them all out.
 */
 void jswrap_ble_restart(JsVar *callback) {
   if (jsble_has_connection()) {
     jsiConsolePrintf("BLE Connected, queueing BLE restart for later\n");
     bleStatus |= BLE_NEEDS_SOFTDEVICE_RESTART;
-    return;
   } else {
     // Not connected, so we can restart now
     jsble_restart_softdevice(jsvIsFunction(callback)?callback:NULL);
-    return;
   }
+}
+
+/*JSON{
+    "type" : "staticmethod",
+    "class" : "NRF",
+    "name" : "eraseBonds",
+    "#if" : "defined(NRF52_SERIES)",
+    "generate" : "jswrap_ble_eraseBonds",
+    "params" : [
+      ["callback","JsVar","[optional] A function to be called while the softdevice is uninitialised. Use with caution - accessing console/bluetooth will almost certainly result in a crash."]
+    ]
+}
+Delete all data stored for all peers (bonding data used for secure connections). This cannot be done
+while a connection is active, so if there is a connection it will be postponed until everything is disconnected
+(which can be done by calling `NRF.disconnect()` and waiting).
+
+Booting your device while holding all buttons down together should also have the same effect.
+*/
+void jswrap_ble_eraseBonds() {
+#if PEER_MANAGER_ENABLED
+  if (jsble_has_connection()) {
+    jsExceptionHere(JSET_ERROR, "BLE Connected, can't erase bonds.");
+  } else {
+    jsble_central_eraseBonds();
+  }
+#endif
 }
 
 /*JSON{
@@ -568,14 +707,21 @@ void jswrap_ble_restart(JsVar *callback) {
     "class" : "NRF",
     "name" : "getAddress",
     "generate" : "jswrap_ble_getAddress",
+    "params" : [
+      ["current", "bool", "If true, return the current address rather than the default"]
+    ],
     "return" : ["JsVar", "MAC address - a string of the form 'aa:bb:cc:dd:ee:ff'" ]
 }
-Get this device's default Bluetooth MAC address.
+Get this device's default or current Bluetooth MAC address.
 
-For Puck.js, the last 5 characters of this (eg. `ee:ff`)
-are used in the device's advertised Bluetooth name.
+For Puck.js, the last 5 characters of this (e.g. `ee:ff`) are used in the
+device's advertised Bluetooth name.
 */
-JsVar *jswrap_ble_getAddress() {
+JsVar *jswrap_ble_getAddress(bool current) {
+  if (current) {
+    JsVar *addr = jsvObjectGetChildIfExists(execInfo.hiddenRoot, BLE_NAME_MAC_ADDRESS);
+    if (addr) return addr;
+  }
 #ifdef NRF5X
   uint32_t addr0 =  NRF_FICR->DEVICEADDR[0];
   uint32_t addr1 =  NRF_FICR->DEVICEADDR[1];
@@ -611,19 +757,20 @@ NRF.setAddress("ff:ee:dd:cc:bb:aa random");
 Addresses take the form:
 
 * `"ff:ee:dd:cc:bb:aa"` or `"ff:ee:dd:cc:bb:aa public"` for a public address
-* `"ff:ee:dd:cc:bb:aa random"` for a random static address (the default for Espruino)
+* `"ff:ee:dd:cc:bb:aa random"` for a random static address (the default for
+  Espruino)
 
-This may throw a `INVALID_BLE_ADDR` error if the upper two bits
-of the address don't match the address type.
+This may throw a `INVALID_BLE_ADDR` error if the upper two bits of the address
+don't match the address type.
 
-To change the address, Espruino must restart the softdevice. It will only do
-so when it is disconnected from other devices.
+To change the address, Espruino must restart the softdevice. It will only do so
+when it is disconnected from other devices.
 */
 void jswrap_ble_setAddress(JsVar *address) {
 #ifdef NRF52_SERIES
   ble_gap_addr_t p_addr;
   if (!bleVarToAddr(address, &p_addr)) {
-    jsExceptionHere(JSET_ERROR, "Expecting a mac address of the form aa:bb:cc:dd:ee:ff");
+    jsExceptionHere(JSET_ERROR, "Expecting mac address of the form aa:bb:cc:dd:ee:ff");
     return;
   }
   jsvObjectSetChild(execInfo.hiddenRoot, BLE_NAME_MAC_ADDRESS, address);
@@ -636,11 +783,61 @@ void jswrap_ble_setAddress(JsVar *address) {
 /*JSON{
     "type" : "staticmethod",
     "class" : "NRF",
+    "name" : "resolveAddress",
+    "#if" : "defined(NRF52_SERIES)",
+    "generate" : "jswrap_ble_resolveAddress",
+    "params" : [
+      ["options" ,"JsVar", "The address that should be resolved."]
+    ],
+    "return": ["JsVar", "The resolved address, or `undefined` if it couldn't be resolved."]
+}
+Try to resolve a **bonded** peer's address from a random private resolvable address. If the peer
+is not bonded, there will be no IRK and `undefined` will be returned.
+
+A bunch of devices, especially smartphones, implement address randomisation and periodically change
+their bluetooth address to prevent being tracked.
+
+If such a device uses a "random private resolvable address", that address is generated
+with the help of an identity resolving key (IRK) that is exchanged during bonding.
+
+If we know the IRK of a device, we can check if an address was potentially generated by that device.
+
+The following will check an address against the IRKs of all bonded devices,
+and return the actual address of a bonded device if the given address was likely generated using that device's IRK:
+
+```
+NRF.on('connect',addr=> {
+  // addr could be "aa:bb:cc:dd:ee:ff private-resolvable"
+  if (addr.endsWith("private-resolvable")) {
+    let resolved = NRF.resolveAddress(addr);
+    // resolved is "aa:bb:cc:dd:ee:ff public"
+    if (resolved) addr = resolved;
+  }
+  console.log("Device connected: ", addr);
+})
+```
+
+You can get the current connection's address using `NRF.getSecurityStatus().connected_addr`,
+so can for instance do `NRF.resolveAddress(NRF.getSecurityStatus().connected_addr)`.
+*/
+JsVar *jswrap_ble_resolveAddress(JsVar *address) {
+#if defined(NRF52_SERIES) && PEER_MANAGER_ENABLED==1
+  return jsble_resolveAddress(address);
+#else
+  jsExceptionHere(JSET_ERROR, "Not implemented");
+  return 0;
+#endif
+}
+
+/*JSON{
+    "type" : "staticmethod",
+    "class" : "NRF",
     "name" : "getBattery",
     "generate" : "jswrap_ble_getBattery",
     "return" : ["float", "Battery level in volts" ]
 }
-Get the battery level in volts (the voltage that the NRF chip is running off of).
+Get the battery level in volts (the voltage that the NRF chip is running off
+of).
 
 This is the battery level of the device itself - it has nothing to with any
 device that might be connected.
@@ -655,20 +852,21 @@ JsVarFloat jswrap_ble_getBattery() {
     "name" : "setAdvertising",
     "generate" : "jswrap_ble_setAdvertising",
     "params" : [
-      ["data","JsVar","The data to advertise as an object - see below for more info"],
-      ["options","JsVar","An optional object of options"]
+      ["data","JsVar","The service data to advertise as an object - see below for more info"],
+      ["options","JsVar","[optional] Object of options"]
     ]
 }
 Change the data that Espruino advertises.
 
-Data can be of the form `{ UUID : data_as_byte_array }`. The UUID should be
-a [Bluetooth Service ID](https://developer.bluetooth.org/gatt/services/Pages/ServicesHome.aspx).
+Data can be of the form `{ UUID : data_as_byte_array }`. The UUID should be a
+[Bluetooth Service
+ID](https://developer.bluetooth.org/gatt/services/Pages/ServicesHome.aspx).
 
 For example to return battery level at 95%, do:
 
 ```
 NRF.setAdvertising({
-  0x180F : [95]
+  0x180F : [95] // Service data 0x180F = 95
 });
 ```
 
@@ -682,8 +880,20 @@ setInterval(function() {
 }, 30000);
 ```
 
-You can also supply the raw advertising data in an array. For example
-to advertise as an Eddystone beacon:
+If you specify a value for the object key, Service Data is advertised. However
+if you specify `undefined`, the Service UUID is advertised:
+
+```
+NRF.setAdvertising({
+  0x180D : undefined // Advertise service UUID 0x180D (HRM)
+});
+```
+
+Service UUIDs can also be supplied in the second argument of `NRF.setServices`,
+but those go in the scan response packet.
+
+You can also supply the raw advertising data in an array. For example to
+advertise as an Eddystone beacon:
 
 ```
 NRF.setAdvertising([0x03,  // Length of Service List
@@ -699,22 +909,23 @@ NRF.setAdvertising([0x03,  // Length of Service List
     {interval:100});
 ```
 
-(However for Eddystone we'd advise that you use the [Espruino Eddystone library](/Puck.js+Eddystone))
+(However for Eddystone we'd advise that you use the [Espruino Eddystone
+library](/Puck.js+Eddystone))
 
 **Note:** When specifying data as an array, certain advertising options such as
 `discoverable` and `showName` won't have any effect.
 
-**Note:** The size of Bluetooth LE advertising packets is limited to 31 bytes. If
-you want to advertise more data, consider using an array for `data` (See below), or
-`NRF.setScanResponse`.
+**Note:** The size of Bluetooth LE advertising packets is limited to 31 bytes.
+If you want to advertise more data, consider using an array for `data` (See
+below), or `NRF.setScanResponse`.
 
-You can even specify an array of arrays or objects, in which case each advertising packet
-will be used in turn - for instance to make your device advertise battery level and its name
-as well as both Eddystone and iBeacon :
+You can even specify an array of arrays or objects, in which case each
+advertising packet will be used in turn - for instance to make your device
+advertise battery level and its name as well as both Eddystone and iBeacon :
 
 ```
 NRF.setAdvertising([
-  {0x180F : [Puck.getBatteryPercentage()]}, // normal advertising, with battery %
+  {0x180F : [E.getBattery()]}, // normal advertising, with battery %
   require("ble_ibeacon").get(...), // iBeacon
   require("ble_eddystone").get(...), // eddystone
 ], {interval:300});
@@ -724,37 +935,40 @@ NRF.setAdvertising([
 
 ```
 {
-  name: "Hello" // The name of the device
-  showName: true/false // include full name, or nothing
-  discoverable: true/false // general discoverable, or limited - default is limited
-  connectable: true/false // whether device is connectable - default is true
-  scannable : true/false // whether device can be scanned for scan response packets - default is true
-  interval: 600 // Advertising interval in msec, between 20 and 10000 (default is 375ms)
-  manufacturer: 0x0590 // IF sending manufacturer data, this is the manufacturer ID
-  manufacturerData: [...] // IF sending manufacturer data, this is an array of data
+  name: "Hello"              // The name of the device
+  showName: true/false       // include full name, or nothing
+  discoverable: true/false   // general discoverable, or limited - default is limited
+  connectable: true/false    // whether device is connectable - default is true
+  scannable : true/false     // whether device can be scanned for scan response packets - default is true
+  whenConnected : true/false // keep advertising when connected (nRF52 only)
+                             // switches to advertising as non-connectable when it is connected
+  interval: 600              // Advertising interval in msec, between 20 and 10000 (default is 375ms)
+  manufacturer: 0x0590       // IF sending manufacturer data, this is the manufacturer ID
+  manufacturerData: [...]    // IF sending manufacturer data, this is an array of data
+  phy: "1mbps/2mbps/coded"   // (NRF52833/NRF52840 only) use the long-range coded phy for transmission (1mbps default)
 }
 ```
 
-Setting `connectable` and `scannable` to false gives the lowest power consumption
-as the BLE radio doesn't have to listen after sending advertising.
+Setting `connectable` and `scannable` to false gives the lowest power
+consumption as the BLE radio doesn't have to listen after sending advertising.
 
-**NOTE:** Non-`connectable` advertising can't have an advertising interval less than 100ms
-according to the BLE spec.
+**NOTE:** Non-`connectable` advertising can't have an advertising interval less
+than 100ms according to the BLE spec.
 
-So for instance to set the name of Puck.js without advertising any
-other data you can just use the command:
+So for instance to set the name of Puck.js without advertising any other data
+you can just use the command:
 
 ```
 NRF.setAdvertising({},{name:"Hello"});
 ```
 
-You can also specify 'manufacturer data', which is another form of advertising data.
-We've registered the Manufacturer ID 0x0590 (as Pur3 Ltd) for use with *Official
-Espruino devices* - use it to advertise whatever data you'd like, but we'd recommend
-using JSON. 
+You can also specify 'manufacturer data', which is another form of advertising
+data. We've registered the Manufacturer ID 0x0590 (as Pur3 Ltd) for use with
+*Official Espruino devices* - use it to advertise whatever data you'd like, but
+we'd recommend using JSON.
 
-For example by not advertising a device name you can send up to 24 bytes of JSON on
-Espruino's manufacturer ID:
+For example by not advertising a device name you can send up to 24 bytes of JSON
+on Espruino's manufacturer ID:
 
 ```
 var data = {a:1,b:2};
@@ -765,16 +979,16 @@ NRF.setAdvertising({},{
 });
 ```
 
-If you're using [EspruinoHub](https://github.com/espruino/EspruinoHub) then it will
-automatically decode this into the folling MQTT topics:
+If you're using [EspruinoHub](https://github.com/espruino/EspruinoHub) then it
+will automatically decode this into the following MQTT topics:
 
 * `/ble/advertise/ma:c_:_a:dd:re:ss/espruino` -> `{"a":10,"b":15}`
 * `/ble/advertise/ma:c_:_a:dd:re:ss/a` -> `1`
 * `/ble/advertise/ma:c_:_a:dd:re:ss/b` -> `2`
 
-Note that **you only have 24 characters available for JSON**, so try to use
-the shortest field names possible and avoid floating point values that can
-be very long when converted to a String.
+Note that **you only have 24 characters available for JSON**, so try to use the
+shortest field names possible and avoid floating point values that can be very
+long when converted to a String.
 */
 void jswrap_ble_setAdvertising(JsVar *data, JsVar *options) {
   uint32_t err_code = 0;
@@ -783,7 +997,7 @@ void jswrap_ble_setAdvertising(JsVar *data, JsVar *options) {
   if (jsvIsObject(options)) {
     JsVar *v;
 
-    v = jsvObjectGetChild(options, "interval", 0);
+    v = jsvObjectGetChildIfExists(options, "interval");
     if (v) {
       uint16_t new_advertising_interval = MSEC_TO_UNITS(jsvGetIntegerAndUnLock(v), UNIT_0_625_MS);
       if (new_advertising_interval<0x0020) new_advertising_interval=0x0020;
@@ -793,18 +1007,28 @@ void jswrap_ble_setAdvertising(JsVar *data, JsVar *options) {
       }
     }
 
-    v = jsvObjectGetChild(options, "connectable", 0);
+    v = jsvObjectGetChildIfExists(options, "connectable");
     if (v) {
       if (jsvGetBoolAndUnLock(v)) bleStatus &= ~BLE_IS_NOT_CONNECTABLE;
       else bleStatus |= BLE_IS_NOT_CONNECTABLE;
     }
-    v = jsvObjectGetChild(options, "scannable", 0);
+    v = jsvObjectGetChildIfExists(options, "scannable");
     if (v) {
       if (jsvGetBoolAndUnLock(v)) bleStatus &= ~BLE_IS_NOT_SCANNABLE;
       else bleStatus |= BLE_IS_NOT_SCANNABLE;
     }
+#ifndef SAVE_ON_FLASH
+    v = jsvObjectGetChildIfExists(options, "whenConnected");
+    if (v) {
+      if (jsvGetBoolAndUnLock(v)) {
+        bleStatus |= BLE_ADVERTISE_WHEN_CONNECTED;
+        if (jsble_has_peripheral_connection()) // if we're connected now, start advertising
+          isAdvertising = true;
+      } else bleStatus &= ~BLE_ADVERTISE_WHEN_CONNECTED;
+    }
+#endif
 
-    v = jsvObjectGetChild(options, "name", 0);
+    v = jsvObjectGetChildIfExists(options, "name");
     if (v) {
       JSV_GET_AS_CHAR_ARRAY(namePtr, nameLen, v);
       if (namePtr) {
@@ -826,7 +1050,7 @@ void jswrap_ble_setAdvertising(JsVar *data, JsVar *options) {
       jsvUnLock(v);
     }
   } else if (!jsvIsUndefined(options)) {
-    jsExceptionHere(JSET_TYPEERROR, "Expecting 'options' to be object or undefined, got %t", options);
+    jsExceptionHere(JSET_TYPEERROR, "Expecting Object or undefined, got %t", options);
     return;
   }
 
@@ -834,9 +1058,11 @@ void jswrap_ble_setAdvertising(JsVar *data, JsVar *options) {
 
   if (jsvIsObject(data) || jsvIsUndefined(data)) {
     // if it's an object, work out what the advertising data for it is
+    // We still call this even for undefined as it does set some global parameters too unfortunately
     advArray = jswrap_ble_getAdvertisingData(data, options);
     // if undefined, make sure we *save* undefined
     if (jsvIsUndefined(data)) {
+      jsvUnLock(advArray);
       advArray = 0;
     }
   } else if (jsvIsArray(data)) {
@@ -884,7 +1110,8 @@ void jswrap_ble_setAdvertising(JsVar *data, JsVar *options) {
     // it's just data - no multiple advertising
     advArray = jsvLockAgain(data);
     bleStatus &= ~(BLE_IS_ADVERTISING_MULTIPLE|BLE_ADVERTISING_MULTIPLE_MASK);
-  }
+  } else
+    jsExceptionHere(JSET_TYPEERROR, "Expecting Array or Object, got %t", data);
   // Save the current service data
   jsvObjectSetOrRemoveChild(execInfo.hiddenRoot, BLE_NAME_ADVERTISE_DATA, advArray);
   jsvObjectSetOrRemoveChild(execInfo.hiddenRoot, BLE_NAME_ADVERTISE_OPTIONS, options);
@@ -893,7 +1120,7 @@ void jswrap_ble_setAdvertising(JsVar *data, JsVar *options) {
   if (isAdvertising)
     jsble_advertising_stop();
 #ifdef ESP32
-  err_code = bluetooth_gap_setAdvertizing(advArray);
+  err_code = bluetooth_gap_setAdvertising(advArray);
 #endif
   jsble_check_error(err_code);
   if (isAdvertising)
@@ -903,8 +1130,9 @@ void jswrap_ble_setAdvertising(JsVar *data, JsVar *options) {
 /// Used by bluetooth.c internally when it needs to set up advertising at first
 JsVar *jswrap_ble_getCurrentAdvertisingData() {
   // This is safe if JS not initialised, jsvObjectGetChild returns 0
-  JsVar *adv = jsvObjectGetChild(execInfo.hiddenRoot, BLE_NAME_ADVERTISE_DATA, 0);
-  if (!adv) adv = jswrap_ble_getAdvertisingData(NULL, NULL); // use the defaults
+  JsVar *adv = jsvObjectGetChildIfExists(execInfo.hiddenRoot, BLE_NAME_ADVERTISE_DATA);
+  // we may not even have started the JS interpreter yet!
+  if (!adv && execInfo.root) adv = jswrap_ble_getAdvertisingData(NULL, NULL); // use the defaults
   else {
     if (bleStatus&BLE_IS_ADVERTISING_MULTIPLE) {
       int idx = (bleStatus&BLE_ADVERTISING_MULTIPLE_MASK)>>BLE_ADVERTISING_MULTIPLE_SHIFT;
@@ -923,12 +1151,12 @@ JsVar *jswrap_ble_getCurrentAdvertisingData() {
     "generate" : "jswrap_ble_getAdvertisingData",
     "params" : [
       ["data","JsVar","The data to advertise as an object"],
-      ["options","JsVar","An optional object of options"]
+      ["options","JsVar","[optional] An object of options"]
     ],
     "return" : ["JsVar", "An array containing the advertising data" ]
 }
-This is just like `NRF.setAdvertising`, except instead of advertising
-the data, it returns the packet that would be advertised as an array.
+This is just like `NRF.setAdvertising`, except instead of advertising the data,
+it returns the packet that would be advertised as an array.
 */
 JsVar *jswrap_ble_getAdvertisingData(JsVar *data, JsVar *options) {
   uint32_t err_code;
@@ -945,17 +1173,17 @@ JsVar *jswrap_ble_getAdvertisingData(JsVar *data, JsVar *options) {
   if (jsvIsObject(options)) {
     JsVar *v;
 #ifdef NRF5X
-    v = jsvObjectGetChild(options, "showName", 0);
+    v = jsvObjectGetChildIfExists(options, "showName");
     if (v) advdata.name_type = jsvGetBoolAndUnLock(v) ?
         BLE_ADVDATA_FULL_NAME :
         BLE_ADVDATA_NO_NAME;
 
-    v = jsvObjectGetChild(options, "discoverable", 0);
+    v = jsvObjectGetChildIfExists(options, "discoverable");
     if (v) advdata.flags = jsvGetBoolAndUnLock(v) ?
         BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE :
         BLE_GAP_ADV_FLAGS_LE_ONLY_LIMITED_DISC_MODE;
 
-    v = jsvObjectGetChild(options, "manufacturerData", 0);
+    v = jsvObjectGetChildIfExists(options, "manufacturerData");
     if (v) {
       JSV_GET_AS_CHAR_ARRAY(dPtr, dLen, v);
       if (dPtr && dLen) {
@@ -966,7 +1194,7 @@ JsVar *jswrap_ble_getAdvertisingData(JsVar *data, JsVar *options) {
       }
       jsvUnLock(v);
     }
-    v = jsvObjectGetChild(options, "manufacturer", 0);
+    v = jsvObjectGetChildIfExists(options, "manufacturer");
     if (v) {
       if (advdata.p_manuf_specific_data)
         advdata.p_manuf_specific_data->company_identifier = jsvGetInteger(v);
@@ -976,7 +1204,7 @@ JsVar *jswrap_ble_getAdvertisingData(JsVar *data, JsVar *options) {
     }
 #endif
   } else if (!jsvIsUndefined(options)) {
-    jsExceptionHere(JSET_TYPEERROR, "Expecting 'options' to be object or undefined, got %t", options);
+    jsExceptionHere(JSET_TYPEERROR, "Expecting Object or undefined, got %t", options);
     return 0;
   }
 
@@ -984,35 +1212,54 @@ JsVar *jswrap_ble_getAdvertisingData(JsVar *data, JsVar *options) {
     return jsvLockAgain(data);
   } else if (jsvIsObject(data)) {
 #ifdef NRF5X
-    ble_advdata_service_data_t *service_data = (ble_advdata_service_data_t*)alloca(jsvGetChildren(data)*sizeof(ble_advdata_service_data_t));
+    // we may not use all of service_data/adv_uuids - but allocate the max we can
+    int maxServices = jsvGetChildren(data);
+    ble_advdata_service_data_t *service_data = (ble_advdata_service_data_t*)alloca(maxServices*sizeof(ble_advdata_service_data_t));
+    int service_data_cnt = 0;
+    ble_uuid_t *adv_uuid = (ble_uuid_t*)alloca(maxServices*sizeof(ble_uuid_t));
+    int adv_uuid_cnt = 0;
+    if (maxServices && (!service_data || !adv_uuid))
+      return 0; // allocation error
 #endif
-    int n = 0;
     JsvObjectIterator it;
     jsvObjectIteratorNew(&it, data);
     while (jsvObjectIteratorHasValue(&it)) {
       JsVar *v = jsvObjectIteratorGetValue(&it);
       JSV_GET_AS_CHAR_ARRAY(dPtr, dLen, v);
-      jsvUnLock(v);
+      const char *errorStr;
+      ble_uuid_t ble_uuid;
+      if ((errorStr=bleVarToUUIDAndUnLock(&ble_uuid, jsvObjectIteratorGetKey(&it)))) {
+        jsExceptionHere(JSET_ERROR, "Invalid Service UUID: %s", errorStr);
+        break;
+      }
 #ifdef NRF5X
-      service_data[n].service_uuid = jsvGetIntegerAndUnLock(jsvObjectIteratorGetKey(&it));
-      service_data[n].data.size    = dLen;
-      service_data[n].data.p_data  = (uint8_t*)dPtr;
+      if (jsvIsUndefined(v)) {
+        adv_uuid[adv_uuid_cnt]  = ble_uuid;
+        adv_uuid_cnt++;
+      } else {
+        service_data[service_data_cnt].service_uuid = ble_uuid.uuid;
+        service_data[service_data_cnt].data.size    = dLen;
+        service_data[service_data_cnt].data.p_data  = (uint8_t*)dPtr;
+        service_data_cnt++;
+      }
 #endif
+      jsvUnLock(v);
       jsvObjectIteratorNext(&it);
-      n++;
     }
     jsvObjectIteratorFree(&it);
 #ifdef NRF5X
-    advdata.service_data_count   = n;
+    advdata.service_data_count   = service_data_cnt;
     advdata.p_service_data_array = service_data;
+    advdata.uuids_complete.uuid_cnt = adv_uuid_cnt;
+    advdata.uuids_complete.p_uuids  = adv_uuid;
 #endif
   } else if (!jsvIsUndefined(data)) {
-    jsExceptionHere(JSET_TYPEERROR, "Expecting object, array or undefined, got %t", data);
+    jsExceptionHere(JSET_TYPEERROR, "Expecting Object, Array or undefined, got %t", data);
     return 0;
   }
 
 #if ESPR_BLUETOOTH_ANCS
-  if (bleStatus & BLE_ANCS_OR_AMS_INITED) {
+  if (bleStatus & BLE_ANCS_AMS_OR_CTS_INITED) {
     static ble_uuid_t m_adv_uuids[1]; /**< Universally unique service identifiers. */
     ble_ancs_get_adv_uuid(m_adv_uuids);
     advdata.uuids_solicited.uuid_cnt = sizeof(m_adv_uuids) / sizeof(m_adv_uuids[0]);
@@ -1048,7 +1295,8 @@ JsVar *jswrap_ble_getAdvertisingData(JsVar *data, JsVar *options) {
     ]
 }
 
-The raw scan response data should be supplied as an array. For example to return "Sample" for the device name:
+The raw scan response data should be supplied as an array. For example to return
+"Sample" for the device name:
 
 ```
 NRF.setScanResponse([0x07,  // Length of Data
@@ -1056,9 +1304,9 @@ NRF.setScanResponse([0x07,  // Length of Data
   'S', 'a', 'm', 'p', 'l', 'e']);
 ```
 
-**Note:** `NRF.setServices(..., {advertise:[ ... ]})` writes advertised
-services into the scan response - so you can't use both `advertise`
-and `NRF.setServices` or one will overwrite the other.
+**Note:** `NRF.setServices(..., {advertise:[ ... ]})` writes advertised services
+into the scan response - so you can't use both `advertise` and `NRF.setServices`
+or one will overwrite the other.
 */
 void jswrap_ble_setScanResponse(JsVar *data) {
   uint32_t err_code = 0;
@@ -1075,36 +1323,14 @@ void jswrap_ble_setScanResponse(JsVar *data) {
     // only set data if we managed to decode it ok
     jsvObjectSetOrRemoveChild(execInfo.hiddenRoot, BLE_NAME_SCAN_RESPONSE_DATA, data);
 
-#ifdef NRF5X
-#if NRF_SD_BLE_API_VERSION<5
-    err_code = sd_ble_gap_adv_data_set(NULL, 0, (uint8_t *)respPtr, respLen);
-#else
-    extern uint8_t m_adv_handle;
-    // Get existing advertising data as on SDK15 we have to be able to re-supply this
-    // when changing the scan response
-    JsVar *advData = jswrap_ble_getCurrentAdvertisingData();
-    JSV_GET_AS_CHAR_ARRAY(advPtr, advLen, advData);
-
-    ble_gap_adv_data_t d;
-    d.adv_data.p_data = (uint8_t *)advPtr;
-    d.adv_data.len = advLen;
-    d.scan_rsp_data.p_data = (uint8_t *)respPtr;
-    d.scan_rsp_data.len = respLen;
-    if (bleStatus & BLE_IS_ADVERTISING) sd_ble_gap_adv_stop(m_adv_handle);
-    err_code = sd_ble_gap_adv_set_configure(&m_adv_handle, &d, NULL);
-    if (bleStatus & BLE_IS_ADVERTISING) sd_ble_gap_adv_start(m_adv_handle, APP_BLE_CONN_CFG_TAG);
-    jsvUnLock(advData);
-#endif
-#else
-    err_code = 0xDEAD;
-    jsiConsolePrintf("FIXME\n");
-#endif
+  err_code=jsble_advertising_update_scanresponse((char *)respPtr, respLen);
     jsble_check_error(err_code);
   } else {
     jsExceptionHere(JSET_TYPEERROR, "Expecting array-like object or undefined, got %t", data);
   }
 }
 
+// TODO TypeScript improve
 /*JSON{
     "type" : "staticmethod",
     "class" : "NRF",
@@ -1112,16 +1338,18 @@ void jswrap_ble_setScanResponse(JsVar *data) {
     "generate" : "jswrap_ble_setServices",
     "params" : [
       ["data","JsVar","The service (and characteristics) to advertise"],
-      ["options","JsVar","Optional object containing options"]
-    ]
+      ["options","JsVar","[optional] Object containing options"]
+    ],
+    "typescript" : "setServices(data: { [key: number]: { [key: number]: { value?: string, maxLen?: number, broadcast?: boolean, readable?: boolean, writable?: boolean, notify?: boolean, indicate?: boolean, description?: string, security?: { read?: { encrypted?: boolean, mitm?: boolean, lesc?: boolean, signed?: boolean }, write?: { encrypted?: boolean, mitm?: boolean, lesc?: boolean, signed?: boolean } }, onWrite?: (evt: { data: ArrayBuffer }) => void } } }, options?: any): void;"
 }
 
 Change the services and characteristics Espruino advertises.
 
-If you want to **change** the value of a characteristic, you need
-to use `NRF.updateServices()` instead
+If you want to **change** the value of a characteristic, you need to use
+`NRF.updateServices()` instead
 
-To expose some information on Characteristic `ABCD` on service `BCDE` you could do:
+To expose some information on Characteristic `ABCD` on service `BCDE` you could
+do:
 
 ```
 NRF.setServices({
@@ -1180,6 +1408,10 @@ NRF.setServices({
       },
       onWrite : function(evt) { // optional
         console.log("Got ", evt.data); // an ArrayBuffer
+      },
+      onWriteDesc : function(evt) { // optional - called when the 'cccd' descriptor is written
+        // for example this is called when notifications are requested by the client:
+        console.log("Notifications enabled = ", evt.data[0]&1);
       }
     }
     // more characteristics allowed
@@ -1188,8 +1420,8 @@ NRF.setServices({
 });
 ```
 
-**Note:** UUIDs can be integers between `0` and `0xFFFF`, strings of
-the form `"ABCD"`, or strings of the form `"ABCDABCD-ABCD-ABCD-ABCD-ABCDABCDABCD"`
+**Note:** UUIDs can be integers between `0` and `0xFFFF`, strings of the form
+`"ABCD"`, or strings of the form `"ABCDABCD-ABCD-ABCD-ABCD-ABCDABCDABCD"`
 
 `options` can be of the form:
 
@@ -1198,20 +1430,21 @@ NRF.setServices(undefined, {
   hid : new Uint8Array(...), // optional, default is undefined. Enable BLE HID support
   uart : true, // optional, default is true. Enable BLE UART support
   advertise: [ '180D' ] // optional, list of service UUIDs to advertise
-  ancs : true, // optional, Bangle.js-only, enable Apple ANCS support for notifications
-  ams : true // optional, Bangle.js-only, enable Apple AMS support for media control
+  ancs : true, // optional, Bangle.js-only, enable Apple ANCS support for notifications (see `NRF.ancs*`)
+  ams : true // optional, Bangle.js-only, enable Apple AMS support for media control (see `NRF.ams*`)
+  cts : true // optional, Bangle.js-only, enable Apple Current Time Service support (see `NRF.ctsGetTime`)
 });
 ```
 
 To enable BLE HID, you must set `hid` to an array which is the BLE report
-descriptor. The easiest way to do this is to use the `ble_hid_controls`
-or `ble_hid_keyboard` modules.
+descriptor. The easiest way to do this is to use the `ble_hid_controls` or
+`ble_hid_keyboard` modules.
 
-**Note:** Just creating a service doesn't mean that the service will
-be advertised. It will only be available after a device connects. To
-advertise, specify the UUIDs you wish to advertise in the `advertise`
-field of the second `options` argument. For example this will create
-and advertise a heart rate service:
+**Note:** Just creating a service doesn't mean that the service will be
+advertised. It will only be available after a device connects. To advertise,
+specify the UUIDs you wish to advertise in the `advertise` field of the second
+`options` argument. For example this will create and advertise a heart rate
+service:
 
 ```
 NRF.setServices({
@@ -1226,26 +1459,27 @@ NRF.setServices({
 
 You may specify 128 bit UUIDs to advertise, however you may get a `DATA_SIZE`
 exception because there is insufficient space in the Bluetooth LE advertising
-packet for the 128 bit UART UUID as well as the UUID you specified. In this
-case you can add `uart:false` after the `advertise` element to disable the
-UART, however you then be unable to connect to Puck.js's console via Bluetooth.
+packet for the 128 bit UART UUID as well as the UUID you specified. In this case
+you can add `uart:false` after the `advertise` element to disable the UART,
+however you then be unable to connect to Puck.js's console via Bluetooth.
 
 If you absolutely require two or more 128 bit UUIDs then you will have to
 specify your own raw advertising data packets with `NRF.setAdvertising`
 
-**Note:** The services on Espruino can only be modified when there is
-no device connected to it as it requires a restart of the Bluetooth stack.
-**iOS devices will 'cache' the list of services** so apps like
-NRF Connect may incorrectly display the old services even after you 
-have modified them. To fix this, disable and re-enable Bluetooth on your
-iOS device, or use an Android device to run NRF Connect.
+**Note:** The services on Espruino can only be modified when there is no device
+connected to it as it requires a restart of the Bluetooth stack. **iOS devices
+will 'cache' the list of services** so apps like NRF Connect may incorrectly
+display the old services even after you have modified them. To fix this, disable
+and re-enable Bluetooth on your iOS device, or use an Android device to run NRF
+Connect.
 
-**Note:** Not all combinations of security configuration values are valid, the valid combinations are: encrypted,
-encrypted + mitm, lesc, signed, signed + mitm. See `NRF.setSecurity` for more information.
+**Note:** Not all combinations of security configuration values are valid, the
+valid combinations are: encrypted, encrypted + mitm, lesc, signed, signed +
+mitm. See `NRF.setSecurity` for more information.
 */
 void jswrap_ble_setServices(JsVar *data, JsVar *options) {
   if (!(jsvIsObject(data) || jsvIsUndefined(data))) {
-    jsExceptionHere(JSET_TYPEERROR, "Expecting object or undefined, got %t", data);
+    jsExceptionHere(JSET_TYPEERROR, "Expecting Object or undefined, got %t", data);
     return;
   }
 
@@ -1256,6 +1490,7 @@ void jswrap_ble_setServices(JsVar *data, JsVar *options) {
 #if ESPR_BLUETOOTH_ANCS
   bool use_ancs = false;
   bool use_ams = false;
+  bool use_cts = false;
 #endif
   JsVar *advertise = 0;
 
@@ -1263,10 +1498,11 @@ void jswrap_ble_setServices(JsVar *data, JsVar *options) {
 #if BLE_HIDS_ENABLED
       {"hid", JSV_ARRAY, &use_hid},
 #endif
-      {"uart", JSV_BOOLEAN, &use_uart},
+      {"uart", JSV_BOOLEAN, &use_uart}, // sets BLE_NAME_NUS
 #if ESPR_BLUETOOTH_ANCS
       {"ancs", JSV_BOOLEAN, &use_ancs},
       {"ams", JSV_BOOLEAN, &use_ams},
+      {"cts", JSV_BOOLEAN, &use_cts},
 #endif
       {"advertise",  JSV_ARRAY, &advertise},
   };
@@ -1316,6 +1552,15 @@ void jswrap_ble_setServices(JsVar *data, JsVar *options) {
       bleStatus |= BLE_NEEDS_SOFTDEVICE_RESTART;
     jsvObjectRemoveChild(execInfo.hiddenRoot, BLE_NAME_AMS);
   }
+  if (use_cts) {
+    if (!(bleStatus & BLE_CTS_INITED))
+      bleStatus |= BLE_NEEDS_SOFTDEVICE_RESTART;
+    jsvObjectSetChildAndUnLock(execInfo.hiddenRoot, BLE_NAME_CTS, jsvNewFromBool(true));
+  } else {
+    if (bleStatus & BLE_CTS_INITED)
+      bleStatus |= BLE_NEEDS_SOFTDEVICE_RESTART;
+    jsvObjectRemoveChild(execInfo.hiddenRoot, BLE_NAME_CTS);
+  }
 #endif
 
   // Save the current service data and options
@@ -1346,8 +1591,9 @@ void jswrap_ble_setServices(JsVar *data, JsVar *options) {
     ]
 }
 
-Update values for the services and characteristics Espruino advertises.
-Only services and characteristics previously declared using `NRF.setServices` are affected.
+Update values for the services and characteristics Espruino advertises. Only
+services and characteristics previously declared using `NRF.setServices` are
+affected.
 
 To update the '0xABCD' characteristic in the '0xBCDE' service:
 
@@ -1361,7 +1607,8 @@ NRF.updateServices({
 });
 ```
 
-You can also use 128 bit UUIDs, for example `"b7920001-3c1b-4b40-869f-3c0db9be80c6"`.
+You can also use 128 bit UUIDs, for example
+`"b7920001-3c1b-4b40-869f-3c0db9be80c6"`.
 
 To define a service and characteristic and then notify connected clients of a
 change to it when a button is pressed:
@@ -1388,13 +1635,15 @@ setWatch(function() {
 }, BTN, { repeat:true, edge:"rising", debounce: 50 });
 ```
 
-This only works if the characteristic was created with `notify: true` using `NRF.setServices`,
-otherwise the characteristic will be updated but no notification will be sent.
+This only works if the characteristic was created with `notify: true` using
+`NRF.setServices`, otherwise the characteristic will be updated but no
+notification will be sent.
 
 Also note that `maxLen` was specified. If it wasn't then the maximum length of
 the characteristic would have been 5 - the length of `"Hello"`.
 
-To indicate (i.e. notify with ACK) connected clients of a change to the '0xABCD' characteristic in the '0xBCDE' service:
+To indicate (i.e. notify with ACK) connected clients of a change to the '0xABCD'
+characteristic in the '0xBCDE' service:
 
 ```
 NRF.updateServices({
@@ -1407,8 +1656,9 @@ NRF.updateServices({
 });
 ```
 
-This only works if the characteristic was created with `indicate: true` using `NRF.setServices`,
-otherwise the characteristic will be updated but no notification will be sent.
+This only works if the characteristic was created with `indicate: true` using
+`NRF.setServices`, otherwise the characteristic will be updated but no
+notification will be sent.
 
 **Note:** See `NRF.setServices` for more information
 */
@@ -1458,10 +1708,10 @@ void jswrap_ble_updateServices(JsVar *data) {
         uint16_t char_handle = bleGetGATTHandle(char_uuid);
         if (char_handle != BLE_GATT_HANDLE_INVALID) {
           JsVar *charVar = jsvObjectIteratorGetValue(&serviceit);
-          JsVar *charValue = jsvObjectGetChild(charVar, "value", 0);
+          JsVar *charValue = jsvObjectGetChildIfExists(charVar, "value");
 
-          bool notification_requested = jsvGetBoolAndUnLock(jsvObjectGetChild(charVar, "notify", 0));
-          bool indication_requested = jsvGetBoolAndUnLock(jsvObjectGetChild(charVar, "indicate", 0));
+          bool notification_requested = jsvObjectGetBoolChild(charVar, "notify");
+          bool indication_requested = jsvObjectGetBoolChild(charVar, "indicate");
 
           if (charValue) {
             JSV_GET_AS_CHAR_ARRAY(vPtr, vLen, charValue);
@@ -1502,10 +1752,12 @@ void jswrap_ble_updateServices(JsVar *data) {
                 }
               }
 #endif
+#ifdef ESP32
+              gatts_update_service(char_handle, vPtr, vLen, notification_requested, indication_requested);
+#endif
             }
           }
-          jsvUnLock(charValue);
-          jsvUnLock(charVar);
+          jsvUnLock2(charValue, charVar);
         } else {
           JsVar *str = bleUUIDToStr(char_uuid);
           jsExceptionHere(JSET_ERROR, "Unable to find service with UUID %v", str);
@@ -1522,7 +1774,7 @@ void jswrap_ble_updateServices(JsVar *data) {
     jsvObjectIteratorFree(&it);
 
   } else if (!jsvIsUndefined(data)) {
-    jsExceptionHere(JSET_TYPEERROR, "Expecting object or undefined, got %t", data);
+    jsExceptionHere(JSET_TYPEERROR, "Expecting Object or undefined, got %t", data);
   }
 }
 
@@ -1536,9 +1788,9 @@ bool jswrap_ble_filter_device(JsVar *filters, JsVar *device) {
     JsVar *filter = jsvObjectIteratorGetValue(&fit);
     matches = true;
     JsVar *v;
-    if ((v = jsvObjectGetChild(filter, "services", 0))) {
+    if ((v = jsvObjectGetChildIfExists(filter, "services"))) {
       // Find one service in the device's service
-      JsVar *deviceServices = jsvObjectGetChild(device, "services", 0);
+      JsVar *deviceServices = jsvObjectGetChildIfExists(device, "services");
       JsvObjectIterator it;
       jsvObjectIteratorNew(&it, v);
       while (jsvObjectIteratorHasValue(&it)) {
@@ -1565,16 +1817,16 @@ bool jswrap_ble_filter_device(JsVar *filters, JsVar *device) {
       jsvObjectIteratorFree(&it);
       jsvUnLock2(v, deviceServices);
     }
-    if ((v = jsvObjectGetChild(filter, "name", 0))) {
+    if ((v = jsvObjectGetChildIfExists(filter, "name"))) {
       // match name exactly
-      JsVar *deviceName = jsvObjectGetChild(device, "name", 0);
+      JsVar *deviceName = jsvObjectGetChildIfExists(device, "name");
       if (!jsvIsEqual(v, deviceName))
         matches = false;
       jsvUnLock2(v, deviceName);
     }
-    if ((v = jsvObjectGetChild(filter, "namePrefix", 0))) {
+    if ((v = jsvObjectGetChildIfExists(filter, "namePrefix"))) {
       // match start of name
-      JsVar *deviceName = jsvObjectGetChild(device, "name", 0);
+      JsVar *deviceName = jsvObjectGetChildIfExists(device, "name");
       if (!jsvIsString(v) ||
           !jsvIsString(deviceName) ||
           jsvGetStringLength(v)>jsvGetStringLength(deviceName) ||
@@ -1583,20 +1835,20 @@ bool jswrap_ble_filter_device(JsVar *filters, JsVar *device) {
       jsvUnLock2(v, deviceName);
     }
     // Non-standard 'id' element
-    if ((v = jsvObjectGetChild(filter, "id", 0))) {
-      JsVar *w = jsvObjectGetChild(device, "id", 0);
+    if ((v = jsvObjectGetChildIfExists(filter, "id"))) {
+      JsVar *w = jsvObjectGetChildIfExists(device, "id");
       if (!jsvIsBasicVarEqual(v,w))
         matches = false;
       jsvUnLock2(v,w);
     }
     // match service data
-    if ((v = jsvObjectGetChild(filter, "serviceData", 0))) {
+    if ((v = jsvObjectGetChildIfExists(filter, "serviceData"))) {
       if (jsvIsObject(v)) {
         JsvObjectIterator it;
         jsvObjectIteratorNew(&it,v);
         while (jsvObjectIteratorHasValue(&it)) {
           JsVar *childName = jsvObjectIteratorGetKey(&it);
-          JsVar *serviceData = jsvObjectGetChild(device, "serviceData", 0);
+          JsVar *serviceData = jsvObjectGetChildIfExists(device, "serviceData");
           if (!serviceData) matches = false;
           else {
             JsVar *child = jsvFindChildFromVar(serviceData, childName, false);
@@ -1611,13 +1863,13 @@ bool jswrap_ble_filter_device(JsVar *filters, JsVar *device) {
       jsvUnLock(v);
     }
     // match manufacturer data
-    if ((v = jsvObjectGetChild(filter, "manufacturerData", 0))) {
+    if ((v = jsvObjectGetChildIfExists(filter, "manufacturerData"))) {
       if (jsvIsObject(v)) {
         JsvObjectIterator it;
         jsvObjectIteratorNew(&it,v);
         while (jsvObjectIteratorHasValue(&it)) {
           JsVar* manfacturera = jsvObjectIteratorGetKey(&it);
-          JsVar* manfacturerb = jsvObjectGetChild(device, "manufacturer", 0);
+          JsVar* manfacturerb = jsvObjectGetChildIfExists(device, "manufacturer");
           if (!jsvIsBasicVarEqual(manfacturera, manfacturerb))
             matches = false;
           jsvUnLock2(manfacturera, manfacturerb);
@@ -1642,13 +1894,13 @@ bool jswrap_ble_filter_device(JsVar *filters, JsVar *device) {
     "generate" : "jswrap_ble_setScan",
     "params" : [
       ["callback","JsVar","The callback to call with received advertising packets, or undefined to stop"],
-      ["options","JsVar","An optional object `{filters: ...}` (as would be passed to `NRF.requestDevice`) to filter devices by"]
+      ["options","JsVar","[optional] An object `{filters: ...}` (as would be passed to `NRF.requestDevice`) to filter devices by"]
     ]
 }
 
 Start/stop listening for BLE advertising packets within range. Returns a
-`BluetoothDevice` for each advertsing packet. **By default this is not an active scan, so
-Scan Response advertising data is not included (see below)**
+`BluetoothDevice` for each advertising packet. **By default this is not an active
+scan, so Scan Response advertising data is not included (see below)**
 
 ```
 // Start scanning
@@ -1672,15 +1924,15 @@ BluetoothDevice {
   "data": new Uint8Array([ ... ]).buffer, // ArrayBuffer of returned data
   "serviceData" : { "0123" : [ 1 ] }, // if service data is in 'data', it's extracted here
   "manufacturer" : 0x1234, // if manufacturer data is in 'data', the 16 bit manufacturer ID is extracted here
-  "manufacturerData" : [...], // if manufacturer data is in 'data', the data is extracted here
+  "manufacturerData" : new Uint8Array([...]).buffer, // if manufacturer data is in 'data', the data is extracted here as an ArrayBuffer
   "name": "DeviceName"       // the advertised device name
  }
 ```
 
-You can also supply a set of filters (as decribed in `NRF.requestDevice`) as a second argument, which will
-allow you to filter the devices you get a callback for. This helps
-to cut down on the time spent processing JavaScript code in areas with
-a lot of Bluetooth advertisements. For example to find only devices
+You can also supply a set of filters (as described in `NRF.requestDevice`) as a
+second argument, which will allow you to filter the devices you get a callback
+for. This helps to cut down on the time spent processing JavaScript code in
+areas with a lot of Bluetooth advertisements. For example to find only devices
 with the manufacturer data `0x0590` (Espruino's ID) you could do:
 
 ```
@@ -1689,18 +1941,23 @@ NRF.setScan(function(d) {
 }, { filters: [{ manufacturerData:{0x0590:{}} }] });
 ```
 
-You can also specify `active:true` in the second argument to perform
-active scanning (this requests scan response packets) from any
-devices it finds.
+You can also specify `active:true` in the second argument to perform active
+scanning (this requests scan response packets) from any devices it finds.
 
-**Note:** BLE advertising packets can arrive quickly - faster than you'll
-be able to print them to the console. It's best only to print a few, or
-to use a function like `NRF.findDevices(..)` which will collate a list
-of available devices.
+**Note:** Using a filter in `setScan` filters each advertising packet
+individually. As a result, if you filter based on a service UUID and a device
+advertises with multiple packets (or a scan response when `active:true`) only
+the packets matching the filter are returned. To aggregate multiple packets you
+can use `NRF.findDevices`.
 
-**Note:** Using setScan turns the radio's receive mode on constantly. This
-can draw a *lot* of power (12mA or so), so you should use it sparingly or
-you can run your battery down quickly.
+**Note:** BLE advertising packets can arrive quickly - faster than you'll be
+able to print them to the console. It's best only to print a few, or to use a
+function like `NRF.findDevices(..)` which will collate a list of available
+devices.
+
+**Note:** Using setScan turns the radio's receive mode on constantly. This can
+draw a *lot* of power (12mA or so), so you should use it sparingly or you can
+run your battery down quickly.
 */
 void jswrap_ble_setScan_cb(JsVar *callback, JsVar *filters, JsVar *adv) {
   /* This is called when we get data - do some processing here in the main loop
@@ -1709,11 +1966,12 @@ void jswrap_ble_setScan_cb(JsVar *callback, JsVar *filters, JsVar *adv) {
   if (!adv) return;
   // Create a proper BluetoothDevice object
   JsVar *device = jspNewObject(0, "BluetoothDevice");
-  jsvObjectSetChildAndUnLock(device, "id", jsvObjectGetChild(adv, "id", 0));
-  jsvObjectSetChildAndUnLock(device, "rssi", jsvObjectGetChild(adv, "rssi", 0));
+  JsVar *deviceAddr =  jsvObjectGetChildIfExists(adv, "id");
+  jsvObjectSetChild(device, "id", deviceAddr);
+  jsvObjectSetChildAndUnLock(device, "rssi", jsvObjectGetChildIfExists(adv, "rssi"));
   JsVar *services = jsvNewEmptyArray();
   JsVar *serviceData = jsvNewObject();
-  JsVar *data = jsvObjectGetChild(adv, "data", 0);
+  JsVar *data = jsvObjectGetChildIfExists(adv, "data");
   if (data) {
     jsvObjectSetChild(device, "data", data);
     JSV_GET_AS_CHAR_ARRAY(dPtr, dLen, data);
@@ -1774,24 +2032,48 @@ void jswrap_ble_setScan_cb(JsVar *callback, JsVar *filters, JsVar *adv) {
     jsvObjectSetChild(device, "serviceData", serviceData);
   jsvUnLock3(data, services, serviceData);
 
-  if (!filters || jswrap_ble_filter_device(filters, device))
+  bool deviceMatchedFilters = !filters || jswrap_ble_filter_device(filters, device);
+
+  /* If BLEADV exists then we're using 'NRF.findDevices'
+  https://github.com/espruino/Espruino/issues/2178 means that if we have
+  a device that advertises its name in a scan response (or other advertising packet)
+  BUT we are filtering by a service in the main advertisement, we want to pass this
+  advertisement through *if any packet from this device previously matched the filters*
+  even if this one doesn't. */
+  if (!deviceMatchedFilters) {
+    JsVar *arr = jsvObjectGetChild(execInfo.hiddenRoot, "BLEADV", JSV_ARRAY);
+    if (arr) {
+      JsvObjectIterator it;
+      jsvObjectIteratorNew(&it, arr);
+      while (!deviceMatchedFilters && jsvObjectIteratorHasValue(&it)) {
+        JsVar *obj = jsvObjectIteratorGetValue(&it);
+        JsVar *addr = jsvObjectGetChildIfExists(obj, "id");
+        if (jsvCompareString(addr, deviceAddr, 0, 0, true) == 0)
+          deviceMatchedFilters = true; // we have already matched - so match this one
+        jsvUnLock2(addr, obj);
+        jsvObjectIteratorNext(&it);
+      }
+      jsvObjectIteratorFree(&it);
+    }
+    jsvUnLock(arr);
+  }
+
+  if (deviceMatchedFilters)
     jspExecuteFunction(callback, 0, 1, &device);
-  jsvUnLock(device);
+  jsvUnLock2(deviceAddr, device);
 }
 
 void jswrap_ble_setScan(JsVar *callback, JsVar *options) {
   JsVar *filters = 0;
-  bool activeScan = false;
   if (jsvIsObject(options)) {
-    activeScan = jsvGetBoolAndUnLock(jsvObjectGetChild(options, "active", 0));
-    filters = jsvObjectGetChild(options, "filters", 0);
+    filters = jsvObjectGetChildIfExists(options, "filters");
     if (filters && !jsvIsArray(filters)) {
       jsvUnLock(filters);
       jsExceptionHere(JSET_TYPEERROR, "requestDevice expecting an array of filters, got %t", filters);
       return;
     }
   } else if (options)
-    jsExceptionHere(JSET_TYPEERROR, "Expecting Object got %t\n", options);
+    jsExceptionHere(JSET_TYPEERROR, "Expecting Object, got %t", options);
   // set the callback event variable
   if (!jsvIsFunction(callback)) callback=0;
   if (callback) {
@@ -1806,7 +2088,7 @@ void jswrap_ble_setScan(JsVar *callback, JsVar *options) {
     jsvObjectRemoveChild(execInfo.root, BLE_SCAN_EVENT);
   }
   // either start or stop scanning
-  uint32_t err_code = jsble_set_scanning(callback != 0, activeScan);
+  uint32_t err_code = jsble_set_scanning(callback != 0, options);
   jsble_check_error(err_code);
   jsvUnLock(filters);
 }
@@ -1824,9 +2106,10 @@ void jswrap_ble_setScan(JsVar *callback, JsVar *options) {
 }
 This function can be used to quickly filter through Bluetooth devices.
 
-For instance if you wish to scan for multiple different types of device at the same time
-then you could use `NRF.findDevices` with all the filters you're interested in. When scanning
-is finished you can then use `NRF.filterDevices` to pick out just the devices of interest.
+For instance if you wish to scan for multiple different types of device at the
+same time then you could use `NRF.findDevices` with all the filters you're
+interested in. When scanning is finished you can then use `NRF.filterDevices` to
+pick out just the devices of interest.
 
 ```
 // the two types of device we're interested in
@@ -1870,11 +2153,12 @@ JsVar *jswrap_ble_filterDevices(JsVar *devices, JsVar *filters) {
     "generate" : "jswrap_ble_findDevices",
     "params" : [
       ["callback","JsVar","The callback to call with received advertising packets (as `BluetoothDevice`), or undefined to stop"],
-      ["options","JsVar","A time in milliseconds to scan for (defaults to 2000), Or an optional object `{filters: ..., timeout : ..., active: bool}` (as would be passed to `NRF.requestDevice`) to filter devices by"]
-    ]
+      ["options","JsVar","[optional] A time in milliseconds to scan for (defaults to 2000), Or an optional object `{filters: ..., timeout : ..., active: bool}` (as would be passed to `NRF.requestDevice`) to filter devices by"]
+    ],
+    "typescript" : "findDevices(callback: (devices: BluetoothDevice[]) => void, options?: number | { filters?: NRFFilters[], timeout?: number, active?: boolean }): void;"
 }
-Utility function to return a list of BLE devices detected in range. Behind the scenes,
-this uses `NRF.setScan(...)` and collates the results.
+Utility function to return a list of BLE devices detected in range. Behind the
+scenes, this uses `NRF.setScan(...)` and collates the results.
 
 ```
 NRF.findDevices(function(devices) {
@@ -1887,12 +2171,13 @@ prints something like:
 ```
 [
   BluetoothDevice {
-    "id": "e7:e0:57:ad:36:a2 random",
+    "id" : "e7:e0:57:ad:36:a2 random",
     "rssi": -45,
     "services": [ "4567" ],
     "serviceData" : { "0123" : [ 1 ] },
-    "manufacturerData" : [...],
-    "data": new ArrayBuffer([ ... ]),
+    "manufacturer" : 1424,
+    "manufacturerData" : new Uint8Array([ ... ]).buffer,
+    "data": new ArrayBuffer([ ... ]).buffer,
     "name": "Puck.js 36a2"
    },
   BluetoothDevice {
@@ -1906,9 +2191,10 @@ prints something like:
 
 For more information on the structure returned, see `NRF.setScan`.
 
-If you want to scan only for specific devices you can replace the timeout with an object
-of the form `{filters: ..., timeout : ..., active: bool}` using the filters
-described in `NRF.requestDevice`. For example to search for devices with Espruino's `manufacturerData`:
+If you want to scan only for specific devices you can replace the timeout with
+an object of the form `{filters: ..., timeout : ..., active: bool}` using the
+filters described in `NRF.requestDevice`. For example to search for devices with
+Espruino's `manufacturerData`:
 
 ```
 NRF.findDevices(function(devices) {
@@ -1916,28 +2202,32 @@ NRF.findDevices(function(devices) {
 }, {timeout : 2000, filters : [{ manufacturerData:{0x0590:{}} }] });
 ```
 
-You could then use [`BluetoothDevice.gatt.connect(...)`](/Reference#l_BluetoothRemoteGATTServer_connect) on
-the device returned to make a connection.
+You could then use
+[`BluetoothDevice.gatt.connect(...)`](/Reference#l_BluetoothRemoteGATTServer_connect)
+on the device returned to make a connection.
 
-You can also use [`NRF.connect(...)`](/Reference#l_NRF_connect) on just the `id` string returned, which
-may be useful if you always want to connect to a specific device.
+You can also use [`NRF.connect(...)`](/Reference#l_NRF_connect) on just the `id`
+string returned, which may be useful if you always want to connect to a specific
+device.
 
-**Note:** Using findDevices turns the radio's receive mode on for 2000ms (or however long you specify). This
-can draw a *lot* of power (12mA or so), so you should use it sparingly or you can run your battery down quickly.
+**Note:** Using findDevices turns the radio's receive mode on for 2000ms (or
+however long you specify). This can draw a *lot* of power (12mA or so), so you
+should use it sparingly or you can run your battery down quickly.
 
-**Note:** The 'data' field contains the data of *the last packet received*. There may have been more
-packets. To get data for each packet individually use `NRF.setScan` instead.
+**Note:** The 'data' field contains the data of *the last packet received*.
+There may have been more packets. To get data for each packet individually use
+`NRF.setScan` instead.
 */
 void jswrap_ble_findDevices_found_cb(JsVar *device) {
   JsVar *arr = jsvObjectGetChild(execInfo.hiddenRoot, "BLEADV", JSV_ARRAY);
   if (!arr) return;
-  JsVar *deviceAddr = jsvObjectGetChild(device, "id", 0);
+  JsVar *deviceAddr = jsvObjectGetChildIfExists(device, "id");
   JsVar *found = 0;
   JsvObjectIterator it;
   jsvObjectIteratorNew(&it, arr);
   while (!found && jsvObjectIteratorHasValue(&it)) {
     JsVar *obj = jsvObjectIteratorGetValue(&it);
-    JsVar *addr = jsvObjectGetChild(obj, "id", 0);
+    JsVar *addr = jsvObjectGetChildIfExists(obj, "id");
     if (jsvCompareString(addr, deviceAddr, 0, 0, true) == 0)
       found = jsvLockAgain(obj);
     jsvUnLock2(addr, obj);
@@ -1949,13 +2239,14 @@ void jswrap_ble_findDevices_found_cb(JsVar *device) {
     jsvObjectIteratorNew(&oit, device);
     while (jsvObjectIteratorHasValue(&oit)) {
       JsVar *key = jsvObjectIteratorGetKey(&oit);
-      JsVar *value = jsvSkipName(key);
+      JsVar *value = jsvObjectIteratorGetValue(&oit);
       JsVar *existingKey = jsvFindChildFromVar(found, key, true);
       bool isServices = jsvIsStringEqual(key,"services");
       bool isServiceData = jsvIsStringEqual(key,"serviceData");
+      JsVar *existingValue = 0;
       if (isServices || isServiceData) {
         // for services or servicedata we append to the array/object
-        JsVar *existingValue = jsvSkipName(existingKey);
+        existingValue = jsvSkipName(existingKey);
         if (existingValue) {
           if (isServices) {
             jsvArrayPushAll(existingValue, value, true);
@@ -1963,9 +2254,10 @@ void jswrap_ble_findDevices_found_cb(JsVar *device) {
             jsvObjectAppendAll(existingValue, value);
           }
           jsvUnLock(existingValue);
-        } else // nothing already - just copy
-          jsvSetValueOfName(existingKey, value);
+        }
       }
+      if (!existingValue) // nothing already - just copy
+        jsvSetValueOfName(existingKey, value);
       jsvUnLock3(existingKey, key, value);
       jsvObjectIteratorNext(&oit);
     }
@@ -1977,7 +2269,7 @@ void jswrap_ble_findDevices_found_cb(JsVar *device) {
 void jswrap_ble_findDevices_timeout_cb() {
   jswrap_ble_setScan(0,0);
   JsVar *arr = jsvObjectGetChild(execInfo.hiddenRoot, "BLEADV", JSV_ARRAY);
-  JsVar *cb = jsvObjectGetChild(execInfo.hiddenRoot, "BLEADVCB", 0);
+  JsVar *cb = jsvObjectGetChildIfExists(execInfo.hiddenRoot, "BLEADVCB");
   jsvObjectRemoveChild(execInfo.hiddenRoot, "BLEADV");
   jsvObjectRemoveChild(execInfo.hiddenRoot, "BLEADVCB");
   if (arr && cb) {
@@ -1995,10 +2287,10 @@ void jswrap_ble_findDevices(JsVar *callback, JsVar *options) {
     time = jsvGetFloat(options);
     options = 0;
   } else if (jsvIsObject(options)) {
-    JsVar *v = jsvObjectGetChild(options,"timeout",0);
+    JsVar *v = jsvObjectGetChildIfExists(options,"timeout");
     if (v) time = jsvGetFloatAndUnLock(v);
   } else if (options) {
-    jsExceptionHere(JSET_ERROR, "Expecting number or object, got %t", options);
+    jsExceptionHere(JSET_ERROR, "Expecting Number or object, got %t", options);
     return;
   }
   if (isnan(time) || time < 10) {
@@ -2027,8 +2319,8 @@ void jswrap_ble_findDevices(JsVar *callback, JsVar *options) {
     ]
 }
 
-Start/stop listening for RSSI values on the currently active connection
-(where This device is a peripheral and is being connected to by a 'central' device)
+Start/stop listening for RSSI values on the currently active connection (where
+This device is a peripheral and is being connected to by a 'central' device)
 
 ```
 // Start scanning
@@ -2059,25 +2351,13 @@ void jswrap_ble_setRSSIHandler(JsVar *callback) {
     "name" : "setTxPower",
     "generate" : "jswrap_ble_setTxPower",
     "params" : [
-      ["power","int","Transmit power. Accepted values are -40(nRF52 only), -30(nRF51 only), -20, -16, -12, -8, -4, 0, and 4 dBm. Others will give an error code."]
+      ["power","int","Transmit power. Accepted values are -40(nRF52 only), -30(nRF51 only), -20, -16, -12, -8, -4, 0, and 4 dBm. On nRF52840 (eg Bangle.js 2) 5/6/7/8 dBm are available too. Others will give an error code."]
     ]
 }
-Set the BLE radio transmit power. The default TX power is 0 dBm.
+Set the BLE radio transmit power. The default TX power is 0 dBm, and
 */
 void jswrap_ble_setTxPower(JsVarInt pwr) {
-  uint32_t              err_code;
-#ifdef NRF5X
-#if NRF_SD_BLE_API_VERSION > 5
-  // TODO: what about BLE_GAP_TX_POWER_ROLE_ADV and BLE_GAP_TX_POWER_ROLE_CONN
-  err_code = sd_ble_gap_tx_power_set(BLE_GAP_TX_POWER_ROLE_SCAN_INIT, 0/*ignored*/, pwr);
-#else
-  err_code = sd_ble_gap_tx_power_set(pwr);
-#endif
-#else
-  err_code = 0xDEAD;
-  jsiConsolePrintf("FIXME\n");
-#endif
-  jsble_check_error(err_code);
+  jsble_set_tx_power(pwr);
 }
 
 
@@ -2085,31 +2365,31 @@ void jswrap_ble_setTxPower(JsVarInt pwr) {
     "type" : "staticmethod",
     "class" : "NRF",
     "name" : "setLowPowerConnection",
+    "deprecated" : true,
     "generate" : "jswrap_ble_setLowPowerConnection",
     "params" : [
       ["lowPower","bool","Whether the connection is low power or not"]
     ]
 }
 
-**THIS IS DEPRECATED** - please use `NRF.setConnectionInterval` for
-peripheral and `NRF.connect(addr, options)`/`BluetoothRemoteGATTServer.connect(options)`
+**THIS IS DEPRECATED** - please use `NRF.setConnectionInterval` for peripheral
+and `NRF.connect(address, options)`/`BluetoothRemoteGATTServer.connect(options)`
 for central connections.
 
-This sets the connection parameters - these affect the transfer speed and
-power usage when the device is connected.
+This sets the connection parameters - these affect the transfer speed and power
+usage when the device is connected.
 
 * When not low power, the connection interval is between 7.5 and 20ms
 * When low power, the connection interval is between 500 and 1000ms
 
-When low power connection is enabled, transfers of data over Bluetooth
-will be very slow, however power usage while connected will be drastically
-decreased.
+When low power connection is enabled, transfers of data over Bluetooth will be
+very slow, however power usage while connected will be drastically decreased.
 
 This will only take effect after the connection is disconnected and
 re-established.
 */
 void jswrap_ble_setLowPowerConnection(bool lowPower) {
-  BLEFlags oldflags = jsvGetIntegerAndUnLock(jsvObjectGetChild(execInfo.hiddenRoot, BLE_NAME_FLAGS, 0));
+  BLEFlags oldflags = jsvGetIntegerAndUnLock(jsvObjectGetChildIfExists(execInfo.hiddenRoot, BLE_NAME_FLAGS));
   BLEFlags flags = oldflags;
   if (lowPower)
     flags |= BLE_FLAGS_LOW_POWER;
@@ -2121,6 +2401,51 @@ void jswrap_ble_setLowPowerConnection(bool lowPower) {
   }
 }
 
+#ifdef USE_NFC
+static void nfc_raw_data_start(uint8_t *dataPtr, size_t dataLen){
+  /* Create a flat string - we need this to store the NFC data so it hangs around.
+   * Avoid having a static var so we have RAM available if not using NFC.
+   * NFC data is read by nfc_callback in bluetooth.c */
+  bool isLongMsg = dataLen > 254;
+  size_t nfcDataLen = dataLen + NDEF_TERM_TLV_LEN + (isLongMsg ? NDEF_HEADER_LEN_LONG : NDEF_HEADER_LEN_SHORT);
+
+
+  JsVar *flatStr = jsvNewFlatStringOfLength(nfcDataLen);
+  if (!flatStr)
+    return jsExceptionHere(JSET_ERROR, "Unable to create string with NFC data in");
+  jsvObjectSetChild(execInfo.hiddenRoot, "NfcData", flatStr);
+  uint8_t *flatStrPtr = (uint8_t*)jsvGetFlatStringPointer(flatStr);
+  jsvUnLock(flatStr);
+
+/* assemble NDEF Message */
+  memcpy(flatStrPtr, NDEF_HEADER, NDEF_HEADER_LEN_LONG); /* fill header */
+  /* inject tag2 message length into header */
+  if (isLongMsg){
+    flatStrPtr[NDEF_HEADER_MSG_LEN_OFFSET] = 255;
+    flatStrPtr[NDEF_HEADER_MSG_LEN_OFFSET+1] = dataLen >> 8;
+    flatStrPtr[NDEF_HEADER_MSG_LEN_OFFSET+2] = dataLen & 255;
+  } else {
+    flatStrPtr[NDEF_HEADER_MSG_LEN_OFFSET] = dataLen;
+  }
+
+  /* add NDEF message record header after NDEF header */
+  uint8_t *ndefMsgPtr = flatStrPtr + (isLongMsg ? NDEF_HEADER_LEN_LONG : NDEF_HEADER_LEN_SHORT);
+  memcpy(ndefMsgPtr, dataPtr, dataLen); /* add payload */
+
+
+  /* write terminator TLV block */
+  flatStrPtr[nfcDataLen - NDEF_TERM_TLV_LEN] = NDEF_TERM_TLV;
+
+  /* start nfc peripheral */
+  JsVar* uid = jswrap_nfc_start(NULL);
+
+  /* inject UID/BCC */
+  size_t len;
+  char *uidPtr = jsvGetDataPointer(uid, &len);
+  if(uidPtr) memcpy(flatStrPtr, uidPtr, TAG_HEADER_LEN);
+  jsvUnLock(uid);
+}
+#endif
 
 /*JSON{
     "type" : "staticmethod",
@@ -2148,7 +2473,7 @@ void jswrap_nfc_URL(JsVar *url) {
   }
 
   if (!jsvIsString(url)) {
-    jsExceptionHere(JSET_TYPEERROR, "Expecting a String, got %t", url);
+    jsExceptionHere(JSET_TYPEERROR, "Expecting String, got %t", url);
     return;
   }
 
@@ -2167,36 +2492,21 @@ void jswrap_nfc_URL(JsVar *url) {
     uriType = NFC_URI_HTTPS;
   }
 
-  /* Encode NDEF message into a flat string - we need this to store the
-   * data so it hangs around. Avoid having a static var so we have RAM
-   * available if not using NFC. NFC data is read by nfc_callback */
-  JsVar *flatStr = jsvNewFlatStringOfLength(NDEF_FULL_URL_HEADER_LEN + urlLen + NDEF_TERM_TLV_LEN);
-  if (!flatStr)
-    return jsExceptionHere(JSET_ERROR, "Unable to create string with URI data in");
-  jsvObjectSetChild(execInfo.hiddenRoot, "NfcData", flatStr);
-  uint8_t *flatStrPtr = (uint8_t*)jsvGetFlatStringPointer(flatStr);
-  jsvUnLock(flatStr);
+  uint16_t msgLen = NDEF_URL_RECORD_HEADER_LEN + urlLen;
+  if (msgLen>NDEF_TAG2_VALUE_MAXLEN)
+    return jsExceptionHere(JSET_ERROR, "URL too long");
 
-  /* assemble NDEF Message */
-  memcpy(flatStrPtr, NDEF_HEADER, NDEF_FULL_URL_HEADER_LEN); /* fill header */
-  flatStrPtr[NDEF_IC_OFFSET] = uriType; /* set URI Identifier Code */
-  memcpy(flatStrPtr+NDEF_FULL_URL_HEADER_LEN, urlPtr, urlLen); /* add payload */
+  uint8_t *ndefMsgPtr = alloca(urlLen+NDEF_URL_RECORD_HEADER_LEN);
+  memcpy(ndefMsgPtr, NDEF_URL_RECORD_HEADER, NDEF_URL_RECORD_HEADER_LEN); /* fill header */
 
-  /* inject length fields into header */
-  flatStrPtr[NDEF_MSG_LEN_OFFSET] = NDEF_RECORD_HEADER_LEN + urlLen;
-  flatStrPtr[NDEF_PL_LEN_LSB_OFFSET] = NDEF_IC_LEN + urlLen;
+  ndefMsgPtr[NDEF_MSG_IC_OFFSET] = uriType; /* set URI Identifier Code */
+  memcpy(ndefMsgPtr+NDEF_URL_RECORD_HEADER_LEN, urlPtr, urlLen); /* add payload */
 
-  /* write terminator TLV block */
-  flatStrPtr[NDEF_FULL_URL_HEADER_LEN + urlLen] = NDEF_TERM_TLV;
+  /* put 16 bit (big endian) payload length into record header */
+  ndefMsgPtr[NDEF_MSG_PL_LEN_MSB_OFFSET] = (NDEF_IC_LEN + urlLen)>>8;
+  ndefMsgPtr[NDEF_MSG_PL_LEN_MSB_OFFSET+1] = (NDEF_IC_LEN + urlLen)&255;
 
-  /* start nfc peripheral */
-  JsVar* uid = jswrap_nfc_start(NULL);
-
-  /* inject UID/BCC */
-  size_t len;
-  char *uidPtr = jsvGetDataPointer(uid, &len);
-  if(uidPtr) memcpy(flatStrPtr, uidPtr, TAG_HEADER_LEN);
-  jsvUnLock(uid);
+  nfc_raw_data_start(ndefMsgPtr, urlLen+NDEF_URL_RECORD_HEADER_LEN);
 #endif
 }
 
@@ -2212,8 +2522,8 @@ void jswrap_nfc_URL(JsVar *url) {
 }
 Enables NFC and with an out of band 16 byte pairing key.
 
-For example the following will enable out of band pairing on BLE
-such that the device will pair when you tap the phone against it:
+For example the following will enable out of band pairing on BLE such that the
+device will pair when you tap the phone against it:
 
 ```
 var bleKey = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x99, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, 0x00];
@@ -2246,18 +2556,8 @@ void jswrap_nfc_pair(JsVar *key) {
                                              &ndef_msg_len);
   if (jsble_check_error(err_code)) return;
 
-  /* Encode NDEF message into a flat string - we need this to store the
-   * data so it hangs around. Avoid having a static var so we have RAM
-   * available if not using NFC. NFC data is read by nfc_callback */
+  nfc_raw_data_start(buf, ndef_msg_len);
 
-  JsVar *flatStr = jsvNewFlatStringOfLength(ndef_msg_len);
-  if (!flatStr)
-    return jsExceptionHere(JSET_ERROR, "Unable to create string with pairing data in");
-  uint8_t *flatStrPtr = (uint8_t*)jsvGetFlatStringPointer(flatStr);
-  memcpy(flatStrPtr, buf, ndef_msg_len);
-
-  jswrap_nfc_raw(flatStr);
-  jsvUnLock(flatStr);
 #endif
 }
 
@@ -2305,18 +2605,7 @@ void jswrap_nfc_androidApp(JsVar *appName) {
                                       &ndef_msg_len);
   if (jsble_check_error(err_code)) return;
 
-  /* Encode NDEF message into a flat string - we need this to store the
-   * data so it hangs around. Avoid having a static var so we have RAM
-   * available if not using NFC. NFC data is read by nfc_callback */
-
-  JsVar *flatStr = jsvNewFlatStringOfLength(ndef_msg_len);
-  if (!flatStr)
-    return jsExceptionHere(JSET_ERROR, "Unable to create string with pairing data in");
-  uint8_t *flatStrPtr = (uint8_t*)jsvGetFlatStringPointer(flatStr);
-  memcpy(flatStrPtr, buf, ndef_msg_len);
-
-  jswrap_nfc_raw(flatStr);
-  jsvUnLock(flatStr);
+  nfc_raw_data_start(buf, ndef_msg_len);
 #endif
 }
 
@@ -2347,40 +2636,12 @@ void jswrap_nfc_raw(JsVar *payload) {
   }
 
   JSV_GET_AS_CHAR_ARRAY(dataPtr, dataLen, payload);
-  if (!dataPtr || !dataLen)
+  if (!dataPtr || !dataLen || dataLen>NDEF_TAG2_VALUE_MAXLEN)
     return jsExceptionHere(JSET_ERROR, "Unable to get NFC data");
 
-  /* Create a flat string - we need this to store the NFC data so it hangs around.
-   * Avoid having a static var so we have RAM available if not using NFC.
-   * NFC data is read by nfc_callback in bluetooth.c */
-  JsVar *flatStr = jsvNewFlatStringOfLength(NDEF_FULL_RAW_HEADER_LEN + dataLen + NDEF_TERM_TLV_LEN);
-  if (!flatStr)
-    return jsExceptionHere(JSET_ERROR, "Unable to create string with NFC data in");
-  jsvObjectSetChild(execInfo.hiddenRoot, "NfcData", flatStr);
-  uint8_t *flatStrPtr = (uint8_t*)jsvGetFlatStringPointer(flatStr);
-  jsvUnLock(flatStr);
-
-  /* assemble NDEF Message */
-  memcpy(flatStrPtr, NDEF_HEADER, NDEF_FULL_RAW_HEADER_LEN); /* fill header */
-  memcpy(flatStrPtr+NDEF_FULL_RAW_HEADER_LEN, dataPtr, dataLen); /* add payload */
-
-  /* inject length fields into header */
-  flatStrPtr[NDEF_MSG_LEN_OFFSET] = dataLen;
-
-  /* write terminator TLV block */
-  flatStrPtr[NDEF_FULL_RAW_HEADER_LEN + dataLen] = NDEF_TERM_TLV;
-
-  /* start nfc peripheral */
-  JsVar* uid = jswrap_nfc_start(NULL);
-
-  /* inject UID/BCC */
-  size_t len;
-  char *uidPtr = jsvGetDataPointer(uid, &len);
-  if(uidPtr) memcpy(flatStrPtr, uidPtr, TAG_HEADER_LEN);
-  jsvUnLock(uid);
+  nfc_raw_data_start((uint8_t*)dataPtr, dataLen);
 #endif
 }
-
 
 /*JSON{
     "type" : "staticmethod",
@@ -2393,10 +2654,11 @@ void jswrap_nfc_raw(JsVar *payload) {
     ],
     "return" : ["JsVar", "Internal tag memory (first 10 bytes of tag data)" ]
 }
-**Advanced NFC Functionality.** If you just want to advertise a URL, use `NRF.nfcURL` instead.
+**Advanced NFC Functionality.** If you just want to advertise a URL, use
+`NRF.nfcURL` instead.
 
-Enables NFC and starts advertising. `NFCrx` events will be
-fired when data is received.
+Enables NFC and starts advertising. `NFCrx` events will be fired when data is
+received.
 
 ```
 NRF.nfcStart();
@@ -2459,7 +2721,8 @@ JsVar *jswrap_nfc_start(JsVar *payload) {
     "generate" : "jswrap_nfc_stop",
     "params" : [ ]
 }
-**Advanced NFC Functionality.** If you just want to advertise a URL, use `NRF.nfcURL` instead.
+**Advanced NFC Functionality.** If you just want to advertise a URL, use
+`NRF.nfcURL` instead.
 
 Disables NFC.
 
@@ -2485,12 +2748,13 @@ void jswrap_nfc_stop() {
       ["payload","JsVar","Optional tx data"]
     ]
 }
-**Advanced NFC Functionality.** If you just want to advertise a URL, use `NRF.nfcURL` instead.
+**Advanced NFC Functionality.** If you just want to advertise a URL, use
+`NRF.nfcURL` instead.
 
-Acknowledges the last frame and optionally transmits a response.
-If payload is an array, then a array.length byte nfc frame is sent.
-If payload is a int, then a 4bit ACK/NACK is sent.
-**Note:** ```nfcSend``` should always be called after an ```NFCrx``` event.
+Acknowledges the last frame and optionally transmits a response. If payload is
+an array, then a array.length byte nfc frame is sent. If payload is a int, then
+a 4bit ACK/NACK is sent. **Note:** ```nfcSend``` should always be called after
+an ```NFCrx``` event.
 
 ```
 NRF.nfcSend(new Uint8Array([0x01, 0x02, ...]));
@@ -2528,9 +2792,11 @@ void jswrap_nfc_send(JsVar *payload) {
     "params" : [
       ["data","JsVar","Input report data as an array"],
       ["callback","JsVar","A callback function to be called when the data is sent"]
-    ]
+    ],
+    "typescript" : "sendHIDReport(data: number[], callback?: () => void): void"
 }
-Send a USB HID report. HID must first be enabled with `NRF.setServices({}, {hid: hid_report})`
+Send a USB HID report. HID must first be enabled with `NRF.setServices({}, {hid:
+hid_report})`
 */
 void jswrap_ble_sendHIDReport(JsVar *data, JsVar *callback) {
 #if BLE_HIDS_ENABLED
@@ -2540,7 +2806,7 @@ void jswrap_ble_sendHIDReport(JsVar *data, JsVar *callback) {
       jsvObjectSetChild(execInfo.root, BLE_HID_SENT_EVENT, callback);
     jsble_send_hid_input_report((uint8_t*)vPtr, vLen);
   } else {
-    jsExceptionHere(JSET_ERROR, "Expecting array, got %t", data);
+    jsExceptionHere(JSET_ERROR, "Expecting Array, got %t", data);
   }
 #endif
 }
@@ -2553,7 +2819,8 @@ void jswrap_ble_sendHIDReport(JsVar *data, JsVar *callback) {
   "params" : [["info","JsVar","An object (see below)"]],
   "ifdef" : "BANGLEJS"
 }
-Called when a notification arrives on an Apple iOS device Bangle.js is connected to
+Called when a notification arrives on an Apple iOS device Bangle.js is connected
+to
 
 
 ```
@@ -2570,10 +2837,12 @@ negative:true
 }
 ```
 
-You can then get more information with something like:
+You can then get more information with `NRF.ancsGetNotificationInfo`, for instance:
 
 ```
-NRF.ancsGetNotificationInfo( event.uid ).then(a=>print("Notify",E.toJS(a)));
+E.on('ANCS', event => {
+  NRF.ancsGetNotificationInfo( event.uid ).then(a=>print("Notify",E.toJS(a)));
+});
 ```
 */
 
@@ -2584,7 +2853,8 @@ NRF.ancsGetNotificationInfo( event.uid ).then(a=>print("Notify",E.toJS(a)));
   "params" : [["info","JsVar","An object (see below)"]],
   "ifdef" : "BANGLEJS"
 }
-Called when a media event arrives on an Apple iOS device Bangle.js is connected to
+Called when a media event arrives on an Apple iOS device Bangle.js is connected
+to
 
 
 ```
@@ -2606,11 +2876,14 @@ truncated : bool // the 'value' was too big to be sent completely
     "params" : [ ],
     "return" : ["bool", "True if Apple Notification Center Service (ANCS) has been initialised and is active" ]
 }
-Check if Apple Notification Center Service (ANCS) is currently active on the BLE connection
+Check if Apple Notification Center Service (ANCS) is currently active on the BLE
+connection
 */
 bool jswrap_ble_ancsIsActive() {
 #if ESPR_BLUETOOTH_ANCS
   return ((bleStatus & BLE_ANCS_INITED) && ble_ancs_is_active());
+#else
+  return false;
 #endif
 }
 
@@ -2625,7 +2898,8 @@ bool jswrap_ble_ancsIsActive() {
       ["positive","bool","`true` for positive action, `false` for negative"]
     ]
 }
-Send an ANCS action for a specific Notification UID. Corresponds to posaction/negaction in the 'ANCS' event that was received
+Send an ANCS action for a specific Notification UID. Corresponds to
+posaction/negaction in the 'ANCS' event that was received
 */
 void jswrap_ble_ancsAction(int uid, bool isPositive) {
 #if ESPR_BLUETOOTH_ANCS
@@ -2649,9 +2923,29 @@ void jswrap_ble_ancsAction(int uid, bool isPositive) {
     "return" : ["JsVar", "A `Promise` that is resolved (or rejected) when the connection is complete" ],
     "return_object" : "Promise"
 }
-Get ANCS info for a notification, eg:
+Get ANCS info for a notification event received via `E.ANCS`, e.g.:
 
+```
+E.on('ANCS', event => {
+  NRF.ancsGetNotificationInfo( event.uid ).then(a=>print("Notify",E.toJS(a)));
+});
+```
 
+Returns:
+
+```
+{
+  "uid" : integer,
+  "appId": string,
+  "title": string,
+  "subtitle": string,
+  "message": string,
+  "messageSize": string,
+  "date": string,
+  "posAction": string,
+  "negAction": string
+}
+```
 
 */
 JsVar *jswrap_ble_ancsGetNotificationInfo(JsVarInt uid) {
@@ -2682,7 +2976,7 @@ JsVar *jswrap_ble_ancsGetNotificationInfo(JsVarInt uid) {
     "return" : ["JsVar", "A `Promise` that is resolved (or rejected) when the connection is complete" ],
     "return_object" : "Promise"
 }
-Get ANCS info for an app (add id is available via `ancsGetNotificationInfo`)
+Get ANCS info for an app (app id is available via `NRF.ancsGetNotificationInfo`)
 
 Promise returns:
 
@@ -2733,6 +3027,8 @@ Check if Apple Media Service (AMS) is currently active on the BLE connection
 bool jswrap_ble_amsIsActive() {
 #if ESPR_BLUETOOTH_ANCS
   return ((bleStatus & BLE_AMS_INITED) && ble_ams_is_active());
+#else
+  return false;
 #endif
 }
 
@@ -2748,16 +3044,19 @@ bool jswrap_ble_amsIsActive() {
     "return" : ["JsVar", "A `Promise` that is resolved (or rejected) when the connection is complete" ],
     "return_object" : "Promise"
 }
-Get Apple Media Service (AMS) info for the current media player.
-"playbackinfo" returns a concatenation of three comma-separated values:
+Get Apple Media Service (AMS) info for the current media player. "playbackinfo"
+returns a concatenation of three comma-separated values:
 
-- PlaybackState: a string that represents the integer value of the playback state:
+- PlaybackState: a string that represents the integer value of the playback
+  state:
     - PlaybackStatePaused = 0
     - PlaybackStatePlaying = 1
     - PlaybackStateRewinding = 2
     - PlaybackStateFastForwarding = 3
-- PlaybackRate: a string that represents the floating point value of the playback rate.
-- ElapsedTime: a string that represents the floating point value of the elapsed time of the current track, in seconds
+- PlaybackRate: a string that represents the floating point value of the
+  playback rate.
+- ElapsedTime: a string that represents the floating point value of the elapsed
+  time of the current track, in seconds
 
 */
 JsVar *jswrap_ble_amsGetPlayerInfo(JsVar *id) {
@@ -2835,7 +3134,8 @@ JsVar *jswrap_ble_amsGetTrackInfo(JsVar *id) {
 }
 Send an AMS command to an Apple Media Service device to control music playback
 
-Command is one of play, pause, playpause, next, prev, volup, voldown, repeat, shuffle, skipforward, skipback, like, dislike, bookmark
+Command is one of play, pause, playpause, next, prev, volup, voldown, repeat,
+shuffle, skipforward, skipback, like, dislike, bookmark
 */
 void jswrap_ble_amsCommand(JsVar *id) {
 #if ESPR_BLUETOOTH_ANCS
@@ -2859,12 +3159,109 @@ void jswrap_ble_amsCommand(JsVar *id) {
   else if (jsvIsStringEqual(id,"dislike")) cmd=BLE_AMS_REMOTE_COMMAND_ID_DISLIKE_TRACK;
   else if (jsvIsStringEqual(id,"bookmark")) cmd=BLE_AMS_REMOTE_COMMAND_ID_BOOKMARK_TRACK;
   else {
-    jsExceptionHere(JSET_ERROR, "Unknown command %q", cmd);
+    jsExceptionHere(JSET_ERROR, "Unknown command %q", id);
     return;
   }
   ble_ams_command(cmd);
 #endif
 }
+
+/*JSON{
+    "type" : "staticmethod",
+    "class" : "NRF",
+    "name" : "ctsIsActive",
+    "ifdef" : "NRF52_SERIES",
+    "generate" : "jswrap_ble_ctsIsActive",
+    "params" : [ ],
+    "return" : ["bool", "True if Apple Current Time Service (CTS) has been initialised and is active" ]
+}
+Check if Apple Current Time Service (CTS) is currently active on the BLE connection
+*/
+bool jswrap_ble_ctsIsActive() {
+#if ESPR_BLUETOOTH_ANCS
+  return ((bleStatus & BLE_CTS_INITED) && ble_cts_is_active());
+#else
+  return false;
+#endif
+}
+
+/*JSON{
+  "type" : "event",
+  "class" : "NRF",
+  "name" : "CTS",
+  "params" : [["info","JsVar","An object (see below)"]],
+  "ifdef" : "BANGLEJS"
+}
+Returns time information from the Current Time Service
+(if requested with `NRF.ctsGetTime` and is activated by calling `NRF.setServices(..., {..., cts:true})`)
+
+```
+{
+  date : // Date object with the current date
+  day :  // if known, 0=sun,1=mon (matches JS `Date`)
+  reason : [ // reason for the date change
+      "external", // External time change
+      "manual",   // Manual update
+      "timezone", // Timezone changed
+      "DST",      // Daylight savings
+    ]
+  timezone // if LTI characteristic exists, this is the timezone
+  dst      // if LTI characteristic exists, this is the dst adjustment
+}
+```
+
+For instance this can be used as follows to update Espruino's time:
+
+```
+E.on('CTS',e=>{
+  setTime(e.date.getTime()/1000);
+});
+NRF.ctsGetTime(); // also returns a promise with CTS info
+```
+*/
+
+/*JSON{
+    "type" : "staticmethod",
+    "class" : "NRF",
+    "name" : "ctsGetTime",
+    "ifdef" : "NRF52_SERIES",
+    "generate" : "jswrap_ble_ctsGetTime",
+    "return" : ["JsVar", "A `Promise` that is resolved (or rejected) when time is received" ],
+    "return_object" : "Promise"
+}
+Read the time from CTS - creates an `NRF.on('CTS', ...)` event as well
+
+```
+NRF.ctsGetTime(); // also returns a promise
+```
+*/
+JsVar *jswrap_ble_ctsGetTime() {
+  JsVar *promise = 0;
+#if ESPR_BLUETOOTH_ANCS
+  if (!(bleStatus & BLE_CTS_INITED) || !ble_cts_is_active()) {
+    jsExceptionHere(JSET_ERROR, "CTS not active");
+    return 0;
+  }
+  if (ble_cts_read_time()) { // if fails, it'll create an exception
+    if (bleNewTask(BLETASK_CTS_GET_TIME, 0)) {
+      promise = jsvLockAgainSafe(blePromise);
+    }
+  }
+#endif
+  return promise;
+}
+
+
+/*TYPESCRIPT
+type NRFFilters = {
+  services?: string[];
+  name?: string;
+  namePrefix?: string;
+  id?: string;
+  serviceData?: object;
+  manufacturerData?: object;
+};
+*/
 
 /*JSON{
     "type" : "staticmethod",
@@ -2875,30 +3272,52 @@ void jswrap_ble_amsCommand(JsVar *id) {
     "params" : [
       ["options","JsVar","Options used to filter the device to use"]
     ],
+    "typescript" : "requestDevice(options?: { filters?: NRFFilters[], timeout?: number, active?: boolean, phy?: string, extended?: boolean }): Promise<any>;",
     "return" : ["JsVar", "A `Promise` that is resolved (or rejected) when the connection is complete" ],
     "return_object" : "Promise"
 }
-Search for available devices matching the given filters. Since we have no UI here,
-Espruino will pick the FIRST device it finds, or it'll call `catch`.
+Search for available devices matching the given filters. Since we have no UI
+here, Espruino will pick the FIRST device it finds, or it'll call `catch`.
 
 `options` can have the following fields:
 
-* `filters` - a list of filters that a device must match before it is returned (see below)
-* `timeout` - the maximum time to scan for in milliseconds (scanning stops when a match
-is found. eg. `NRF.requestDevice({ timeout:2000, filters: [ ... ] })`
-* `active` - whether to perform active scanning (requesting 'scan response' packets from any
-devices that are found). eg. `NRF.requestDevice({ active:true, filters: [ ... ] })`
+* `filters` - a list of filters that a device must match before it is returned
+  (see below)
+* `timeout` - the maximum time to scan for in milliseconds (scanning stops when
+a match is found. e.g. `NRF.requestDevice({ timeout:2000, filters: [ ... ] })`
+* `active` - whether to perform active scanning (requesting 'scan response'
+packets from any devices that are found). e.g. `NRF.requestDevice({ active:true,
+filters: [ ... ] })`
+* `phy` - (NRF52833/NRF52840 only) the type of Bluetooth signals to scan for (can
+  be `"1mbps/coded/both/2mbps"`)
+  * `1mbps` (default) - standard Bluetooth LE advertising
+  * `coded` - long range
+  * `both` - standard and long range
+  * `2mbps` - high speed 2mbps (not working)
+* `extended` - (NRF52833/NRF52840 only) support receiving extended-length advertising
+  packets (default=true if phy isn't `"1mbps"`)
+* `extended` - (NRF52833/NRF52840 only) support receiving extended-length advertising
+  packets (default=true if phy isn't `"1mbps"`)
+* `window` - (2v22+) how long we scan for in milliseconds (default 100ms)
+* `interval` - (2v22+) how often we scan in milliseconds (default 100ms) - `window=interval=100`(default) is all the time. When
+scanning on both `1mbps` and `coded`, `interval` needs to be twice `window`.
 
 **NOTE:** `timeout` and `active` are not part of the Web Bluetooth standard.
 
 The following filter types are implemented:
 
-* `services` - list of services as strings (all of which must match). 128 bit services must be in the form '01230123-0123-0123-0123-012301230123'
+* `services` - list of services as strings (all of which must match). 128 bit
+  services must be in the form '01230123-0123-0123-0123-012301230123'
 * `name` - exact device name
 * `namePrefix` - starting characters of device name
-* `id` - exact device address (`id:"e9:53:86:09:89:99 random"`) (this is Espruino-specific, and is not part of the Web Bluetooth spec)
-* `serviceData` - an object containing service characteristics which must all match (`serviceData:{"1809":{}}`). Matching of actual service data is not supported yet.
-* `manufacturerData` - an object containing manufacturer UUIDs which must all match (`manufacturerData:{0x0590:{}}`). Matching of actual manufacturer data is not supported yet.
+* `id` - exact device address (`id:"e9:53:86:09:89:99 random"`) (this is
+  Espruino-specific, and is not part of the Web Bluetooth spec)
+* `serviceData` - an object containing **lowercase** service characteristics which must all
+  match (`serviceData:{"1809":{}}`). Matching of actual service data is not
+  supported yet.
+* `manufacturerData` - an object containing manufacturer UUIDs which must all
+  match (`manufacturerData:{0x0590:{}}`). Matching of actual manufacturer data
+  is not supported yet.
 
 ```
 NRF.requestDevice({ filters: [{ namePrefix: 'Puck.js' }] }).then(function(device) { ... });
@@ -2941,6 +3360,14 @@ NRF.requestDevice({ filters: [{ namePrefix: 'Puck.js' }]}).then(
 
 Note that you have to keep track of the `gatt` variable so that you can
 disconnect the Bluetooth connection when you're done.
+
+**Note:** Using a filter in `NRF.requestDevice` filters each advertising packet
+individually. As soon as a matching advertisement is received,
+`NRF.requestDevice` resolves the promise and stops scanning. This means that if
+you filter based on a service UUID and a device advertises with multiple packets
+(or a scan response when `active:true`) only the packet matching the filter is
+returned - you may not get the device's name is that was in a separate packet.
+To aggregate multiple packets you can use `NRF.findDevices`.
 */
 #if CENTRAL_LINK_COUNT>0
 /// Called when we timeout waiting for a device
@@ -2957,9 +3384,7 @@ void jswrap_ble_requestDevice_scan(JsVar *device) {
     return;
   // We know the device matches because setScan would have checked for us
   jswrap_ble_setScan(0,0); // stop scanning
-  JsVar *argArr = jsvNewArray(&bleTaskInfo, 1);
-  jswrap_interface_clearTimeout(argArr /*the timeout*/); // cancel the timeout
-  jsvUnLock(argArr);
+  jsiClearTimeout(bleTaskInfo /*the timeout*/); // cancel the timeout
   bleCompleteTaskSuccess(BLETASK_REQUEST_DEVICE, device);
 }
 #endif
@@ -2967,10 +3392,10 @@ void jswrap_ble_requestDevice_scan(JsVar *device) {
 JsVar *jswrap_ble_requestDevice(JsVar *options) {
 #if CENTRAL_LINK_COUNT>0
   if (!(jsvIsUndefined(options) || jsvIsObject(options))) {
-    jsExceptionHere(JSET_TYPEERROR, "Expecting an object, for %t", options);
+    jsExceptionHere(JSET_TYPEERROR, "Expecting Object, got %t", options);
     return 0;
   }
-  JsVar *filters = jsvObjectGetChild(options, "filters", 0);
+  JsVar *filters = jsvObjectGetChildIfExists(options, "filters");
   if (!jsvIsArray(filters)) {
     jsvUnLock(filters);
     jsExceptionHere(JSET_TYPEERROR, "requestDevice expecting an array of filters, got %t", filters);
@@ -2978,7 +3403,7 @@ JsVar *jswrap_ble_requestDevice(JsVar *options) {
   }
   jsvUnLock(filters);
 
-  JsVarFloat timeout = jsvGetFloatAndUnLock(jsvObjectGetChild(options, "timeout", 0));
+  JsVarFloat timeout = jsvObjectGetFloatChild(options, "timeout");
   if (isnan(timeout) || timeout<=0) timeout = 2000;
 
   JsVar *promise = 0;
@@ -3017,8 +3442,8 @@ JsVar *jswrap_ble_requestDevice(JsVar *options) {
     "return" : ["JsVar", "A `Promise` that is resolved (or rejected) when the connection is complete" ],
     "return_object" : "Promise"
 }
-Connect to a BLE device by MAC address. Returns a promise,
-the argument of which is the `BluetoothRemoteGATTServer` connection.
+Connect to a BLE device by MAC address. Returns a promise, the argument of which
+is the `BluetoothRemoteGATTServer` connection.
 
 ```
 NRF.connect("aa:bb:cc:dd:ee").then(function(server) {
@@ -3026,10 +3451,12 @@ NRF.connect("aa:bb:cc:dd:ee").then(function(server) {
 });
 ```
 
-This has the same effect as calling `BluetoothDevice.gatt.connect` on a `BluetoothDevice` requested
-using `NRF.requestDevice`. It just allows you to specify the address directly (without having to scan).
+This has the same effect as calling `BluetoothDevice.gatt.connect` on a
+`BluetoothDevice` requested using `NRF.requestDevice`. It just allows you to
+specify the address directly (without having to scan).
 
-You can use it as follows - this would connect to another Puck device and turn its LED on:
+You can use it as follows - this would connect to another Puck device and turn
+its LED on:
 
 ```
 var gatt;
@@ -3046,11 +3473,12 @@ NRF.connect("aa:bb:cc:dd:ee random").then(function(g) {
 });
 ```
 
-**Note:** Espruino Bluetooth devices use a type of BLE address known as 'random static',
-which is different to a 'public' address. To connect to an Espruino device you'll need 
-to use an address string of the form `"aa:bb:cc:dd:ee random"` rather than just 
-`"aa:bb:cc:dd:ee"`. If you scan for devices with `NRF.findDevices`/`NRF.setScan` then
-addresses are already reported in the correct format.
+**Note:** Espruino Bluetooth devices use a type of BLE address known as 'random
+static', which is different to a 'public' address. To connect to an Espruino
+device you'll need to use an address string of the form `"aa:bb:cc:dd:ee
+random"` rather than just `"aa:bb:cc:dd:ee"`. If you scan for devices with
+`NRF.findDevices`/`NRF.setScan` then addresses are already reported in the
+correct format.
 */
 JsVar *jswrap_ble_connect(JsVar *mac, JsVar *options) {
 #if CENTRAL_LINK_COUNT>0
@@ -3079,14 +3507,13 @@ JsVar *jswrap_ble_connect(JsVar *mac, JsVar *options) {
       ["whitelisting","bool","Are we using a whitelist? (default false)"]
     ]
 }
-If set to true, whenever a device bonds it will be added to the
-whitelist.
+If set to true, whenever a device bonds it will be added to the whitelist.
 
-When set to false, the whitelist is cleared and newly bonded
-devices will not be added to the whitelist.
+When set to false, the whitelist is cleared and newly bonded devices will not be
+added to the whitelist.
 
-**Note:** This is remembered between `reset()`s but isn't
-remembered after power-on (you'll have to add it to `onInit()`.
+**Note:** This is remembered between `reset()`s but isn't remembered after
+power-on (you'll have to add it to `onInit()`.
 */
 void jswrap_ble_setWhitelist(bool whitelist) {
 #if PEER_MANAGER_ENABLED
@@ -3104,29 +3531,32 @@ void jswrap_ble_setWhitelist(bool whitelist) {
       ["interval","JsVar","The connection interval to use (see below)"]
     ]
 }
-When connected, Bluetooth LE devices communicate at a set interval.
-Lowering the interval (eg. more packets/second) means a lower delay when
-sending data, higher bandwidth, but also more power consumption.
+When connected, Bluetooth LE devices communicate at a set interval. Lowering the
+interval (e.g. more packets/second) means a lower delay when sending data, higher
+bandwidth, but also more power consumption.
 
 By default, when connected as a peripheral Espruino automatically adjusts the
-connection interval. When connected it's as fast as possible (7.5ms) but when idle
-for over a minute it drops to 200ms. On continued activity (>1 BLE operation) the
-interval is raised to 7.5ms again.
+connection interval. When connected it's as fast as possible (7.5ms) but when
+idle for over a minute it drops to 200ms. On continued activity (>1 BLE
+operation) the interval is raised to 7.5ms again.
 
 The options for `interval` are:
 
 * `undefined` / `"auto"` : (default) automatically adjust connection interval
-* `100` : set min and max connection interval to the same number (between 7.5ms and 4000ms)
-* `{minInterval:20, maxInterval:100}` : set min and max connection interval as a range
+* `100` : set min and max connection interval to the same number (between 7.5ms
+  and 4000ms)
+* `{minInterval:20, maxInterval:100}` : set min and max connection interval as a
+  range
 
-This configuration is not remembered during a `save()` - you will have to
-re-set it via `onInit`.
+This configuration is not remembered during a `save()` - you will have to re-set
+it via `onInit`.
 
-**Note:** If connecting to another device (as Central), you can use
-an extra argument to `NRF.connect` or `BluetoothRemoteGATTServer.connect`
-to specify a connection interval.
+**Note:** If connecting to another device (as Central), you can use an extra
+argument to `NRF.connect` or `BluetoothRemoteGATTServer.connect` to specify a
+connection interval.
 
-**Note:** This overwrites any changes imposed by the deprecated `NRF.setLowPowerConnection`
+**Note:** This overwrites any changes imposed by the deprecated
+`NRF.setLowPowerConnection`
 */
 void jswrap_ble_setConnectionInterval(JsVar *interval) {
 #if NRF52_SERIES
@@ -3141,8 +3571,8 @@ void jswrap_ble_setConnectionInterval(JsVar *interval) {
   } else if (jsvIsObject(interval)) {
     // disable auto interval
     bleStatus |= BLE_DISABLE_DYNAMIC_INTERVAL;
-    JsVarFloat min = jsvGetFloatAndUnLock(jsvObjectGetChild(interval,"minInterval",0));
-    JsVarFloat max = jsvGetFloatAndUnLock(jsvObjectGetChild(interval,"maxInterval",0));
+    JsVarFloat min = jsvObjectGetFloatChild(interval,"minInterval");
+    JsVarFloat max = jsvObjectGetFloatChild(interval,"maxInterval");
     jsble_check_error(jsble_set_periph_connection_interval(min, max));
   }
 #endif
@@ -3158,31 +3588,36 @@ void jswrap_ble_setConnectionInterval(JsVar *interval) {
       ["options","JsVar","An object containing security-related options (see below)"]
     ]
 }
-Sets the security options used when connecting/pairing. This applies to both central
-*and* peripheral mode.
+Sets the security options used when connecting/pairing. This applies to both
+central *and* peripheral mode.
 
 ```
 NRF.setSecurity({
-  display : bool  // default false, can this device display a passkey
+  display : bool  // default false, can this device display a passkey on a screen/etc?
                   // - sent via the `BluetoothDevice.passkey` event
   keyboard : bool // default false, can this device enter a passkey
                   // - request sent via the `BluetoothDevice.passkeyRequest` event
+  pair : bool // default true, allow other devices to pair with this device
   bond : bool // default true, Perform bonding
+              // This stores info from pairing in flash and allows reconnecting without having to pair each time
   mitm : bool // default false, Man In The Middle protection
   lesc : bool // default false, LE Secure Connections
-  passkey : // default "", or a 6 digit passkey to use
+  passkey : // default "", or a 6 digit passkey to use (display must be true for this)
   oob : [0..15] // if specified, Out Of Band pairing is enabled and
                 // the 16 byte pairing code supplied here is used
   encryptUart : bool // default false (unless oob or passkey specified)
                      // This sets the BLE UART service such that it
-                     // is encrypted and can only be used from a bonded connection
+                     // is encrypted and can only be used from a paired connection
+  privacy : // default false, true to enable with (ideally sensible) defaults,
+            // or an object defining BLE privacy / random address options - see below for more info
+            // only available if Espruino was compiled with private address support (like for example on Bangle.js 2)
 });
 ```
 
 **NOTE:** Some combinations of arguments will cause an error. For example
 supplying a passkey without `display:1` is not allowed. If `display:1` is set
-you do not require a physical display, the user just needs to know
-the passkey you supplied.
+you do not require a physical display, the user just needs to know the passkey
+you supplied.
 
 For instance, to require pairing and to specify a passkey, use:
 
@@ -3190,16 +3625,22 @@ For instance, to require pairing and to specify a passkey, use:
 NRF.setSecurity({passkey:"123456", mitm:1, display:1});
 ```
 
-However, while most devices will request a passkey for pairing at
-this point it is still possible for a device to connect without
-requiring one (eg. using the 'NRF Connect' app).
+Or to require pairing and to display a PIN that the connecting device
+provides, use:
 
+```
+NRF.setSecurity({mitm:1, display:1});
+NRF.on("passkey", key => print("Enter PIN: ", key));
+```
 
-To force a passkey you need to protect each characteristic
-you define with `NRF.setSecurity`. For instance the following
-code will *require* that the passkey `123456` is entered
-before the characteristic `9d020002-bf5f-1d1a-b52a-fe52091d5b12`
-can be read.
+However, while most devices will request a passkey for pairing at this point it
+is still possible for a device to connect without requiring one (e.g. using the
+'NRF Connect' app).
+
+To force a passkey you need to protect each characteristic you define with
+`NRF.setSecurity`. For instance the following code will *require* that the
+passkey `123456` is entered before the characteristic
+`9d020002-bf5f-1d1a-b52a-fe52091d5b12` can be read.
 
 ```
 NRF.setSecurity({passkey:"123456", mitm:1, display:1});
@@ -3240,12 +3681,60 @@ NRF.setServices({
 });
 ```
 
-**Note:** If `passkey` or `oob` is specified, the Nordic UART service (if enabled)
-will automatically be set to require encryption, but otherwise it is open.
+**Note:** If `passkey` or `oob` is specified, the Nordic UART service (if
+enabled) will automatically be set to require encryption, but otherwise it is
+open.
+
+On Bangle.js 2, the `privacy` parameter can be used to set this device's BLE privacy / random address settings.
+
+The privacy feature provides a way to avoid being tracked over a period of time.
+This works by replacing the real BLE address with a random private address,
+that automatically changes at a specified interval.
+
+If a `"random_private_resolvable"` address is used, that address is generated with the help
+of an identity resolving key (IRK), that is exchanged during bonding.
+This allows a bonded device to still identify another device that is using a random private resolvable address.
+
+Note that, while this can help against being tracked, there are other ways a Bluetooth device can reveal its identity.
+For example, the name or services it advertises may be unique enough.
+
+```
+NRF.setSecurity({
+  privacy: {
+    mode : "off"/"device_privacy"/"network_privacy" // The privacy mode that should be used.
+    addr_type : "random_private_resolvable"/"random_private_non_resolvable" // The type of address to use.
+    addr_cycle_s : int // How often the address should change, in seconds.
+  }
+});
+// enabled with (ideally sensible) defaults of:
+// mode: device_privacy
+// addr_type: random_private_resolvable
+// addr_cycle_s: 0 (use default address change interval)
+NRF.setSecurity({
+  privacy: 1
+});
+```
+
+`mode` can be one of:
+
+* `"off"` - Use the real address.
+* `"device_privacy"` - Use a private address.
+* `"network_privacy"` - Use a private address,
+                        and reject a peer that uses its real address if we know that peer's IRK.
+
+If `mode` is `"off"`, all other fields are ignored and become optional.
+
+`addr_type` can be one of:
+
+* `"random_private_resolvable"` - Address that can be resolved by a bonded peer that knows our IRK.
+* `"random_private_non_resolvable"` - Address that cannot be resolved.
+
+`addr_cycle_s` must be an integer. Pass `0` to use the default address change interval.
+The default is usually to change the address every 15 minutes (or 900 seconds).
 */
 void jswrap_ble_setSecurity(JsVar *options) {
   if (!jsvIsObject(options) && !jsvIsUndefined(options))
-    jsExceptionHere(JSET_TYPEERROR, "Expecting an object or undefined, got %t", options);
+    jsExceptionHere(JSET_TYPEERROR, "Expecting Object or undefined, got %t", options);
   else {
     jsvObjectSetOrRemoveChild(execInfo.hiddenRoot, BLE_NAME_SECURITY, options);
     jsble_update_security();
@@ -3255,16 +3744,43 @@ void jswrap_ble_setSecurity(JsVar *options) {
   }
 }
 
+/*TYPESCRIPT
+type NRFSecurityStatus = {
+  advertising: boolean,
+  privacy?: ShortBoolean | {
+    mode: "off"
+  } | {
+    mode: "device_privacy" | "network_privacy",
+    addr_type: "random_private_resolvable" | "random_private_non_resolvable",
+    addr_cycle_s: number,
+  },
+} & (
+  {
+    connected: true,
+    encrypted: boolean,
+    mitm_protected: boolean,
+    bonded: boolean,
+    connected_addr?: string,
+  } | {
+    connected: false,
+    encrypted: false,
+    mitm_protected: false,
+    bonded: false,
+  }
+);
+*/
+
 /*JSON{
     "type" : "staticmethod",
     "class" : "NRF",
     "name" : "getSecurityStatus",
     "ifdef" : "NRF52_SERIES",
     "generate" : "jswrap_ble_getSecurityStatus",
-    "return" : ["JsVar", "An object" ]
+    "return" : ["JsVar", "An object" ],
+    "return_object" : "NRFSecurityStatus"
 }
-Return an object with information about the security
-state of the current peripheral connection:
+Return an object with information about the security state of the current
+peripheral connection:
 
 ```
 {
@@ -3272,7 +3788,10 @@ state of the current peripheral connection:
   encrypted       // Communication on this link is encrypted.
   mitm_protected  // The encrypted communication is also protected against man-in-the-middle attacks.
   bonded          // The peer is bonded with us
+  advertising     // Are we currently advertising?
   connected_addr  // If connected=true, the MAC address of the currently connected device
+  privacy         // Current BLE privacy / random address settings.
+                  // Only present if Espruino was compiled with private address support (like for example on Bangle.js 2).
 }
 ```
 
@@ -3297,12 +3816,14 @@ JsVar *jswrap_ble_getSecurityStatus(JsVar *parent) {
 }
 */
 JsVar *jswrap_ble_startBonding(bool forceRePair) {
+#if PEER_MANAGER_ENABLED
   if (bleNewTask(BLETASK_BONDING, NULL)) {
-     JsVar *promise = jsvLockAgainSafe(blePromise);
-     jsble_startBonding(forceRePair);
-     return promise;
-   }
-   return 0;
+    JsVar *promise = jsvLockAgainSafe(blePromise);
+    jsble_startBonding(forceRePair);
+    return promise;
+  }
+#endif
+  return 0;
 }
 
 /*JSON{
@@ -3310,7 +3831,8 @@ JsVar *jswrap_ble_startBonding(bool forceRePair) {
   "class" : "BluetoothDevice",
   "ifdef" : "NRF52_SERIES"
 }
-A Web Bluetooth-style device - you can request one using `NRF.requestDevice(address)`
+A Web Bluetooth-style device - you can request one using
+`NRF.requestDevice(options)`
 
 For example:
 
@@ -3342,7 +3864,7 @@ NRF.requestDevice({ filters: [{ name: 'Puck.js abcd' }] }).then(function(device)
 */
 JsVar *jswrap_BluetoothDevice_gatt(JsVar *parent) {
 #if CENTRAL_LINK_COUNT>0
-  JsVar *gatt = jsvObjectGetChild(parent, "gatt", 0);
+  JsVar *gatt = jsvObjectGetChildIfExists(parent, "gatt");
   if (gatt) return gatt;
 
   gatt = jspNewObject(0, "BluetoothRemoteGATTServer");
@@ -3375,7 +3897,8 @@ JsVar *jswrap_BluetoothDevice_gatt(JsVar *parent) {
 }
 Called when the device pairs and sends a passkey that Espruino should display.
 
-For this to be used, you'll have to specify that there's a display using `NRF.setSecurity`
+For this to be used, you'll have to specify that there's a display using
+`NRF.setSecurity`
 
 **This is not part of the Web Bluetooth Specification.** It has been added
 specifically for Espruino.
@@ -3386,11 +3909,14 @@ specifically for Espruino.
     "name" : "passkeyRequest",
     "ifdef" : "NRF52_SERIES"
 }
-Called when the device pairs, displays a passkey, and wants Espruino to tell it what the passkey was.
+Called when the device pairs, displays a passkey, and wants Espruino to tell it
+what the passkey was.
 
-Respond with `BluetoothDevice.sendPasskey()` with a 6 character string containing only `0..9`.
+Respond with `BluetoothDevice.sendPasskey("123456")` with a 6 character string
+containing only `0..9`.
 
-For this to be used, you'll have to specify that there's a keyboard using `NRF.setSecurity`
+For this to be used, you'll have to specify that there's a keyboard using
+`NRF.setSecurity`
 
 **This is not part of the Web Bluetooth Specification.** It has been added
 specifically for Espruino.
@@ -3405,7 +3931,8 @@ specifically for Espruino.
       ["passkey","JsVar","A 6 character numeric String to be returned to the device"]
     ]
 }
-To be used as a response when the event `BluetoothDevice.sendPasskey` has been received.
+To be used as a response when the event `BluetoothDevice.sendPasskey` has been
+received.
 
 **This is not part of the Web Bluetooth Specification.** It has been added
 specifically for Espruino.
@@ -3416,7 +3943,7 @@ void jswrap_ble_BluetoothDevice_sendPasskey(JsVar *parent, JsVar *passkeyVar) {
   char passkey[BLE_GAP_PASSKEY_LEN+1];
   memset(passkey, 0, sizeof(passkey));
   jsvGetStringChars(passkeyVar,0,passkey, sizeof(passkey));
-  uint32_t err_code = jsble_central_send_passkey(passkey);
+  uint32_t err_code = jsble_central_send_passkey(jswrap_ble_BluetoothDevice_getHandle(parent), passkey);
   jsble_check_error(err_code);
 #endif
 }
@@ -3429,13 +3956,13 @@ void jswrap_ble_BluetoothDevice_sendPasskey(JsVar *parent, JsVar *passkeyVar) {
     "#if" : "defined(NRF52_SERIES) || defined(ESP32)",
     "generate" : "jswrap_ble_BluetoothRemoteGATTServer_connect",
     "params" : [
-      ["options","JsVar","(Espruino-specific) An object of connection options (see below)"]
+      ["options","JsVar","[optional] (Espruino-specific) An object of connection options (see below)"]
     ],
     "return" : ["JsVar", "A `Promise` that is resolved (or rejected) when the connection is complete" ],
     "return_object" : "Promise"
 }
-Connect to a BLE device - returns a promise,
-the argument of which is the `BluetoothRemoteGATTServer` connection.
+Connect to a BLE device - returns a promise, the argument of which is the
+`BluetoothRemoteGATTServer` connection.
 
 See [`NRF.requestDevice`](/Reference#l_NRF_requestDevice) for usage examples.
 
@@ -3448,9 +3975,9 @@ See [`NRF.requestDevice`](/Reference#l_NRF_requestDevice) for usage examples.
 }
 ```
 
-By default the interval is 20-200ms (or 500-1000ms if `NRF.setLowPowerConnection(true)` was called.
-During connection Espruino negotiates with the other device to find a common interval that can be
-used.
+By default the interval is 20-200ms (or 500-1000ms if
+`NRF.setLowPowerConnection(true)` was called. During connection Espruino
+negotiates with the other device to find a common interval that can be used.
 
 For instance calling:
 
@@ -3460,8 +3987,14 @@ NRF.requestDevice({ filters: [{ namePrefix: 'Pixl.js' }] }).then(function(device
 }).then(function(g) {
 ```
 
-will force the connection to use the fastest connection interval possible (as long as the device
-at the other end supports it).
+will force the connection to use the fastest connection interval possible (as
+long as the device at the other end supports it).
+
+**Note:** The Web Bluetooth spec states that if a device hasn't advertised its
+name, when connected to a device the central (in this case Espruino) should
+automatically retrieve the name from the corresponding characteristic (`0x2a00`
+on service `0x1800`). Espruino does not automatically do this.
+
 */
 #if CENTRAL_LINK_COUNT>0
 static void _jswrap_ble_central_connect(JsVar *addr, JsVar *options) {
@@ -3477,19 +4010,19 @@ static void _jswrap_ble_central_connect(JsVar *addr, JsVar *options) {
 JsVar *jswrap_ble_BluetoothRemoteGATTServer_connect(JsVar *parent, JsVar *options) {
 #if CENTRAL_LINK_COUNT>0
 
-  JsVar *device = jsvObjectGetChild(parent, "device", 0);
-  JsVar *addr = jsvObjectGetChild(device, "id", 0);
+  JsVar *device = jsvObjectGetChildIfExists(parent, "device");
+  JsVar *addr = jsvObjectGetChildIfExists(device, "id");
   // Convert mac address to something readable
   ble_gap_addr_t peer_addr;
   if (!bleVarToAddr(addr, &peer_addr)) {
     jsvUnLock2(device, addr);
-    jsExceptionHere(JSET_TYPEERROR, "Expecting a device with a mac address of the form aa:bb:cc:dd:ee:ff");
+    jsExceptionHere(JSET_TYPEERROR, "Expecting device with a mac address of the form aa:bb:cc:dd:ee:ff");
     return 0;
   }
   jsvUnLock(device);
 
   // we're already connected - just return a resolved promise
-  if (jsvGetBoolAndUnLock(jsvObjectGetChild(parent,"connected",0))) {
+  if (jsvObjectGetBoolChild(parent,"connected")) {
     return jswrap_promise_resolve(parent);
   }
 
@@ -3516,17 +4049,25 @@ JsVar *jswrap_ble_BluetoothRemoteGATTServer_connect(JsVar *parent, JsVar *option
   "class" : "BluetoothRemoteGATTServer",
     "#if" : "defined(NRF52_SERIES) || defined(ESP32)"
 }
-Web Bluetooth-style GATT server - get this using `NRF.connect(address)`
-or `NRF.requestDevice(options)` and `response.gatt.connect`
+Web Bluetooth-style GATT server - get this using `NRF.connect(address)` or
+`NRF.requestDevice(options)` and `response.gatt.connect`
 
 https://webbluetoothcg.github.io/web-bluetooth/#bluetoothremotegattserver
 */
 /*JSON{
     "type" : "property",
-    "class" : "BluetoothDevice",
+    "class" : "BluetoothRemoteGATTServer",
     "name" : "connected",
     "generate" : false,
     "return" : ["bool", "Whether the device is connected or not" ]
+}
+*//*Documentation only*/
+/*JSON{
+    "type" : "property",
+    "class" : "BluetoothRemoteGATTServer",
+    "name" : "handle",
+    "generate" : false,
+    "return" : ["int", "The handle to this device (if it is currently connected) - the handle is an internal value used by the Bluetooth Stack" ]
 }
 *//*Documentation only*/
 /*JSON{
@@ -3539,24 +4080,25 @@ https://webbluetoothcg.github.io/web-bluetooth/#bluetoothremotegattserver
     "#if" : "defined(NRF52_SERIES) || defined(ESP32)"
 }
 Disconnect from a previously connected BLE device connected with
-`BluetoothRemoteGATTServer.connect` - this does not disconnect from something that has
-connected to the Espruino.
+`BluetoothRemoteGATTServer.connect` - this does not disconnect from something
+that has connected to the Espruino.
 
-**Note:** While `.disconnect` is standard Web Bluetooth, in the spec it
-returns undefined not a `Promise` for implementation reasons. In Espruino
-we return a `Promise` to make it easier to detect when Espruino is free
-to connect to something else.
+**Note:** While `.disconnect` is standard Web Bluetooth, in the spec it returns
+undefined not a `Promise` for implementation reasons. In Espruino we return a
+`Promise` to make it easier to detect when Espruino is free to connect to
+something else.
 */
 JsVar *jswrap_BluetoothRemoteGATTServer_disconnect(JsVar *parent) {
 #if CENTRAL_LINK_COUNT>0
   uint32_t              err_code;
 
-  if (m_central_conn_handle != BLE_CONN_HANDLE_INVALID) {
+  uint16_t central_conn_handle = jswrap_ble_BluetoothRemoteGATTServer_getHandle(parent);
+  if (central_conn_handle != BLE_CONN_HANDLE_INVALID) {
     // we have a connection, disconnect
     JsVar *promise = 0;
     if (bleNewTask(BLETASK_DISCONNECT, parent/*BluetoothRemoteGATTServer*/))
       promise = jsvLockAgainSafe(blePromise);
-    err_code = jsble_disconnect(m_central_conn_handle);
+    err_code = jsble_disconnect(central_conn_handle);
     jsble_check_error(err_code);
     return promise;
   } else {
@@ -3593,8 +4135,8 @@ JsVar *jswrap_BluetoothRemoteGATTServer_disconnect(JsVar *parent) {
     "return" : ["JsVar", "A `Promise` that is resolved (or rejected) when the bonding is complete" ],
     "return_object" : "Promise"
 }
-Start negotiating bonding (secure communications) with the connected device,
-and return a Promise that is completed on success or failure.
+Start negotiating bonding (secure communications) with the connected device, and
+return a Promise that is completed on success or failure.
 
 ```
 var gatt;
@@ -3620,7 +4162,7 @@ JsVar *jswrap_ble_BluetoothRemoteGATTServer_startBonding(JsVar *parent, bool for
 #if CENTRAL_LINK_COUNT>0
   if (bleNewTask(BLETASK_BONDING, parent/*BluetoothRemoteGATTServer*/)) {
     JsVar *promise = jsvLockAgainSafe(blePromise);
-    jsble_central_startBonding(forceRePair);
+    jsble_central_startBonding(jswrap_ble_BluetoothRemoteGATTServer_getHandle(parent), forceRePair);
     return promise;
   }
   return 0;
@@ -3637,10 +4179,11 @@ JsVar *jswrap_ble_BluetoothRemoteGATTServer_startBonding(JsVar *parent, bool for
     "name" : "getSecurityStatus",
     "ifdef" : "NRF52_SERIES",
     "generate" : "jswrap_ble_BluetoothRemoteGATTServer_getSecurityStatus",
-    "return" : ["JsVar", "An object" ]
+    "return" : ["JsVar", "An object" ],
+    "return_object" : "NRFSecurityStatus"
 }
-Return an object with information about the security
-state of the current connection:
+Return an object with information about the security state of the current
+connection:
 
 
 ```
@@ -3652,15 +4195,15 @@ state of the current connection:
 }
 ```
 
-See `BluetoothRemoteGATTServer.startBonding` for information about
-negotiating a secure connection.
+See `BluetoothRemoteGATTServer.startBonding` for information about negotiating a
+secure connection.
 
 **This is not part of the Web Bluetooth Specification.** It has been added
 specifically for Puck.js.
 */
 JsVar *jswrap_ble_BluetoothRemoteGATTServer_getSecurityStatus(JsVar *parent) {
 #if CENTRAL_LINK_COUNT>0
-  return jsble_get_security_status(m_central_conn_handle);
+  return jsble_get_security_status(jswrap_ble_BluetoothRemoteGATTServer_getHandle(parent));
 #else
   jsExceptionHere(JSET_ERROR, "Unimplemented");
   return 0;
@@ -3684,8 +4227,12 @@ JsVar *jswrap_BluetoothRemoteGATTServer_getPrimaryService(JsVar *parent, JsVar *
   const char *err;
   ble_uuid_t uuid;
 
-  if (!bleNewTask(BLETASK_PRIMARYSERVICE, 0))
+  JsVar *device = jsvObjectGetChildIfExists(parent, "device");
+  bool ok = bleNewTask(BLETASK_PRIMARYSERVICE, device/*BluetoothDevice*/);
+  jsvUnLock(device);
+  if (!ok) {
     return 0;
+  }
 
   err = bleVarToUUID(&uuid, service);
   if (err) {
@@ -3694,7 +4241,7 @@ JsVar *jswrap_BluetoothRemoteGATTServer_getPrimaryService(JsVar *parent, JsVar *
   }
 
   JsVar *promise = jsvLockAgainSafe(blePromise);
-  jsble_central_getPrimaryServices(uuid);
+  jsble_central_getPrimaryServices(jswrap_ble_BluetoothRemoteGATTServer_getHandle(parent), uuid);
   return promise;
 #else
   jsExceptionHere(JSET_ERROR, "Unimplemented");
@@ -3716,10 +4263,14 @@ JsVar *jswrap_BluetoothRemoteGATTServer_getPrimaryServices(JsVar *parent) {
   ble_uuid_t uuid;
   uuid.type = BLE_UUID_TYPE_UNKNOWN;
 
-  if (!bleNewTask(BLETASK_PRIMARYSERVICE, 0))
+  JsVar *device = jsvObjectGetChildIfExists(parent, "device");
+  bool ok = bleNewTask(BLETASK_PRIMARYSERVICE, device/*BluetoothDevice*/);
+  jsvUnLock(device);
+  if (!ok)
     return 0;
+
   JsVar *promise = jsvLockAgainSafe(blePromise);
-  jsble_central_getPrimaryServices(uuid);
+  jsble_central_getPrimaryServices(jswrap_ble_BluetoothRemoteGATTServer_getHandle(parent), uuid);
   return promise;
 #else
   jsExceptionHere(JSET_ERROR, "Unimplemented");
@@ -3758,7 +4309,7 @@ void jswrap_BluetoothRemoteGATTServer_setRSSIHandler(JsVar *parent, JsVar *callb
   if (!jsvIsFunction(callback)) callback=0;
   jsvObjectSetChild(parent, BLE_RSSI_EVENT, callback);
   // either start or stop scanning
-  uint32_t err_code = jsble_set_central_rssi_scan(callback != 0);
+  uint32_t err_code = jsble_set_central_rssi_scan(jswrap_ble_BluetoothRemoteGATTServer_getHandle(parent), callback != 0);
   jsble_check_error(err_code);
 #else
   jsExceptionHere(JSET_ERROR, "Unimplemented");
@@ -3771,10 +4322,20 @@ void jswrap_BluetoothRemoteGATTServer_setRSSIHandler(JsVar *parent, JsVar *callb
   "class" : "BluetoothRemoteGATTService",
   "#if" : "defined(NRF52_SERIES) || defined(ESP32)"
 }
-Web Bluetooth-style GATT service - get this using `BluetoothRemoteGATTServer.getPrimaryService(s)`
+Web Bluetooth-style GATT service - get this using
+`BluetoothRemoteGATTServer.getPrimaryService(s)`
 
 https://webbluetoothcg.github.io/web-bluetooth/#bluetoothremotegattservice
 */
+/*JSON{
+    "type" : "property",
+    "class" : "BluetoothRemoteGATTService",
+    "name" : "device",
+    "ifdef" : "NRF52_SERIES",
+    "generate" : false,
+    "return" : ["JsVar", "The `BluetoothDevice` this Service came from" ]
+}
+*//*Documentation only*/
 /*JSON{
   "type" : "method",
   "class" : "BluetoothRemoteGATTService",
@@ -3782,7 +4343,7 @@ https://webbluetoothcg.github.io/web-bluetooth/#bluetoothremotegattservice
   "generate" : "jswrap_BluetoothRemoteGATTService_getCharacteristic",
   "params" : [ ["characteristic","JsVar","The characteristic UUID"] ],
   "return" : ["JsVar", "A `Promise` that is resolved (or rejected) when the characteristic is found (the argument contains a `BluetoothRemoteGATTCharacteristic`)" ],
-    "return_object" : "Promise",
+  "return_object" : "Promise",
   "#if" : "defined(NRF52_SERIES) || defined(ESP32)"
 }
 See `NRF.connect` for usage examples.
@@ -3792,7 +4353,7 @@ JsVar *jswrap_BluetoothRemoteGATTService_getCharacteristic(JsVar *parent, JsVar 
   const char *err;
   ble_uuid_t uuid;
 
-  if (!bleNewTask(BLETASK_CHARACTERISTIC, 0))
+  if (!bleNewTask(BLETASK_CHARACTERISTIC, parent/*BluetoothRemoteGATTService*/))
     return 0;
 
   err = bleVarToUUID(&uuid, characteristic);
@@ -3802,7 +4363,7 @@ JsVar *jswrap_BluetoothRemoteGATTService_getCharacteristic(JsVar *parent, JsVar 
   }
 
   JsVar *promise = jsvLockAgainSafe(blePromise);
-  jsble_central_getCharacteristics(parent, uuid);
+  jsble_central_getCharacteristics(jswrap_ble_BluetoothRemoteGATTService_getHandle(parent), parent, uuid);
   return promise;
 #else
   jsExceptionHere(JSET_ERROR, "Unimplemented");
@@ -3815,7 +4376,7 @@ JsVar *jswrap_BluetoothRemoteGATTService_getCharacteristic(JsVar *parent, JsVar 
   "name" : "getCharacteristics",
   "generate" : "jswrap_BluetoothRemoteGATTService_getCharacteristics",
   "return" : ["JsVar", "A `Promise` that is resolved (or rejected) when the characteristic is found (the argument contains an array of `BluetoothRemoteGATTCharacteristic`)" ],
-    "return_object" : "Promise",
+  "return_object" : "Promise",
   "#if" : "defined(NRF52_SERIES) || defined(ESP32)"
 }
 */
@@ -3824,11 +4385,11 @@ JsVar *jswrap_BluetoothRemoteGATTService_getCharacteristics(JsVar *parent) {
   ble_uuid_t uuid;
   uuid.type = BLE_UUID_TYPE_UNKNOWN;
 
-  if (!bleNewTask(BLETASK_CHARACTERISTIC, 0))
+  if (!bleNewTask(BLETASK_CHARACTERISTIC, parent/*BluetoothRemoteGATTService*/))
     return 0;
 
   JsVar *promise = jsvLockAgainSafe(blePromise);
-  jsble_central_getCharacteristics(parent, uuid);
+  jsble_central_getCharacteristics(jswrap_ble_BluetoothRemoteGATTService_getHandle(parent), parent, uuid);
   return promise;
 #else
   jsExceptionHere(JSET_ERROR, "Unimplemented");
@@ -3841,10 +4402,20 @@ JsVar *jswrap_BluetoothRemoteGATTService_getCharacteristics(JsVar *parent) {
   "class" : "BluetoothRemoteGATTCharacteristic",
   "#if" : "defined(NRF52_SERIES) || defined(ESP32)"
 }
-Web Bluetooth-style GATT characteristic - get this using `BluetoothRemoteGATTService.getCharacteristic(s)`
+Web Bluetooth-style GATT characteristic - get this using
+`BluetoothRemoteGATTService.getCharacteristic(s)`
 
 https://webbluetoothcg.github.io/web-bluetooth/#bluetoothremotegattcharacteristic
 */
+/*JSON{
+    "type" : "property",
+    "class" : "BluetoothRemoteGATTCharacteristic",
+    "name" : "service",
+    "ifdef" : "NRF52_SERIES",
+    "generate" : false,
+    "return" : ["JsVar", "The `BluetoothRemoteGATTService` this Service came from" ]
+}
+*//*Documentation only*/
 /*JSON{
     "type" : "method",
     "class" : "BluetoothRemoteGATTCharacteristic",
@@ -3886,7 +4457,7 @@ JsVar *jswrap_ble_BluetoothRemoteGATTCharacteristic_writeValue(JsVar *characteri
     return 0;
 
   JsVar *promise = jsvLockAgainSafe(blePromise);
-  jsble_central_characteristicWrite(characteristic, dataPtr, dataLen);
+  jsble_central_characteristicWrite(jswrap_ble_BluetoothRemoteGATTCharacteristic_getHandle(characteristic), characteristic, dataPtr, dataLen);
   return promise;
 #else
   jsExceptionHere(JSET_ERROR, "Unimplemented");
@@ -3925,11 +4496,11 @@ NRF.connect(device_address).then(function(d) {
 */
 JsVar *jswrap_ble_BluetoothRemoteGATTCharacteristic_readValue(JsVar *characteristic) {
 #if CENTRAL_LINK_COUNT>0
-  if (!bleNewTask(BLETASK_CHARACTERISTIC_READ, characteristic))
+  if (!bleNewTask(BLETASK_CHARACTERISTIC_READ, characteristic/*BluetoothRemoteGATTCharacteristic*/))
     return 0;
 
   JsVar *promise = jsvLockAgainSafe(blePromise);
-  jsble_central_characteristicRead(characteristic);
+  jsble_central_characteristicRead(jswrap_ble_BluetoothRemoteGATTCharacteristic_getHandle(characteristic), characteristic);
   return promise;
 #else
   jsExceptionHere(JSET_ERROR, "Unimplemented");
@@ -3944,10 +4515,11 @@ JsVar *jswrap_ble_BluetoothRemoteGATTCharacteristic_readValue(JsVar *characteris
     "generate" : "jswrap_ble_BluetoothRemoteGATTCharacteristic_startNotifications",
     "return" : ["JsVar", "A `Promise` that is resolved (or rejected) with data when notifications have been added" ],
     "return_object" : "Promise",
-    "ifdef" : "NRF52_SERIES"
+    "#if" : "defined(NRF52_SERIES) || defined(ESP32)"
 }
-Starts notifications - whenever this characteristic's value changes, a `characteristicvaluechanged` event is fired
-and `characteristic.value` will then contain the new value as a `DataView`.
+Starts notifications - whenever this characteristic's value changes, a
+`characteristicvaluechanged` event is fired and `characteristic.value` will then
+contain the new value as a `DataView`.
 
 ```
 var device;
@@ -3969,8 +4541,8 @@ NRF.connect(device_address).then(function(d) {
 });
 ```
 
-For example, to listen to the output of another Puck.js's Nordic
-Serial port service, you can use:
+For example, to listen to the output of another Puck.js's Nordic Serial port
+service, you can use:
 
 ```
 var gatt;
@@ -3991,31 +4563,35 @@ NRF.connect("pu:ck:js:ad:dr:es random").then(function(g) {
 */
 JsVar *jswrap_ble_BluetoothRemoteGATTCharacteristic_startNotifications(JsVar *characteristic) {
 #if CENTRAL_LINK_COUNT>0
-  
+  uint16_t central_conn_handle = jswrap_ble_BluetoothRemoteGATTCharacteristic_getHandle(characteristic);
+
   // Set our characteristic's handle up in the list of handles to notify for
   // TODO: What happens when we close the connection and re-open another?
-  uint16_t handle = (uint16_t)jsvGetIntegerAndUnLock(jsvObjectGetChild(characteristic, "handle_value", 0));
+  uint16_t handle = (uint16_t)jsvObjectGetIntegerChild(characteristic, "handle_value");
   JsVar *handles = jsvObjectGetChild(execInfo.hiddenRoot, "bleHdl", JSV_ARRAY);
   if (handles) {
     jsvSetArrayItem(handles, handle, characteristic);
     jsvUnLock(handles);
   }
-  
+
   JsVar *promise;
-  
-  // Check for existing cccd_handle 
-  JsVar *cccdVar = jsvObjectGetChild(characteristic,"handle_cccd", 0);
+#ifndef ESP32
+  // Check for existing cccd_handle
+  JsVar *cccdVar = jsvObjectGetChildIfExists(characteristic,"handle_cccd");
   if ( !cccdVar ) { // if it doesn't exist, try and find it
-    if (!bleNewTask(BLETASK_CHARACTERISTIC_DESC_AND_STARTNOTIFY, characteristic))
+    if (!bleNewTask(BLETASK_CHARACTERISTIC_DESC_AND_STARTNOTIFY, characteristic/*BluetoothRemoteGATTCharacteristic*/))
       return 0;
     promise = jsvLockAgainSafe(blePromise);
-    jsble_central_characteristicDescDiscover(characteristic);
+    jsble_central_characteristicDescDiscover(central_conn_handle, characteristic);
   } else {
     jsvUnLock(cccdVar);
-    if (!bleNewTask(BLETASK_CHARACTERISTIC_NOTIFY, 0))
+#else
+  {
+#endif
+    if (!bleNewTask(BLETASK_CHARACTERISTIC_NOTIFY, characteristic/*BluetoothRemoteGATTCharacteristic*/))
       return 0;
-    promise = jsvLockAgainSafe(blePromise);    
-    jsble_central_characteristicNotify(characteristic, true);
+    promise = jsvLockAgainSafe(blePromise);
+    jsble_central_characteristicNotify(central_conn_handle, characteristic, true);
   }
   return promise;
 #else
@@ -4033,22 +4609,53 @@ JsVar *jswrap_ble_BluetoothRemoteGATTCharacteristic_startNotifications(JsVar *ch
     "return_object" : "Promise",
     "ifdef" : "NRF52_SERIES"
 }
-Stop notifications (that were requested with `BluetoothRemoteGATTCharacteristic.startNotifications`)
+Stop notifications (that were requested with
+`BluetoothRemoteGATTCharacteristic.startNotifications`)
 */
 JsVar *jswrap_ble_BluetoothRemoteGATTCharacteristic_stopNotifications(JsVar *characteristic) {
 #if CENTRAL_LINK_COUNT>0
+  uint16_t central_conn_handle = jswrap_ble_BluetoothRemoteGATTCharacteristic_getHandle(characteristic);
+
   // Remove our characteristic handle from the list of handles to notify for
-  uint16_t handle = (uint16_t)jsvGetIntegerAndUnLock(jsvObjectGetChild(characteristic, "handle_value", 0));
+  uint16_t handle = (uint16_t)jsvObjectGetIntegerChild(characteristic, "handle_value");
   JsVar *handles = jsvObjectGetChild(execInfo.hiddenRoot, "bleHdl", JSV_ARRAY);
   if (handles) {
     jsvSetArrayItem(handles, handle, 0);
     jsvUnLock(handles);
   }
   JsVar *promise = jsvLockAgainSafe(blePromise);
-  jsble_central_characteristicNotify(characteristic, false);
+  jsble_central_characteristicNotify(central_conn_handle, characteristic, false);
   return promise;
 #else
   jsExceptionHere(JSET_ERROR, "Unimplemented");
   return 0;
+#endif
+}
+
+
+/*JSON{
+  "type" : "powerusage",
+  "generate" : "jswrap_ble_powerusage"
+}*/
+void jswrap_ble_powerusage(JsVar *devices) {
+#ifdef NRF5X
+  // https://devzone.nordicsemi.com/power/w/opp/2/online-power-profiler-for-bluetooth-le
+  if (jsble_has_peripheral_connection()) {
+    int perSec = 800 / blePeriphConnectionInterval; // blePeriphConnectionInterval is in units of 1.25ms
+    jsvObjectSetChildAndUnLock(devices, "BLE_periph", jsvNewFromInteger(5*perSec)); // ~5uA per connection interval
+  }
+  if (jsble_has_central_connection()) {
+    jsvObjectSetChildAndUnLock(devices, "BLE_central", jsvNewFromInteger(500));
+    // Could do finer grained central connection
+  }
+  if (bleStatus & BLE_IS_ADVERTISING) {
+    int perSec = 1600 / bleAdvertisingInterval; // bleAdvertisingInterval is in units of 0.625ms
+    jsvObjectSetChildAndUnLock(devices, "BLE_advertise", jsvNewFromInteger(12*perSec)); // ~12uA per advertisement
+    // Could try and take advertising length into account?
+  }
+  if (bleStatus & BLE_IS_SCANNING) {
+    jsvObjectSetChildAndUnLock(devices, "BLE_scan", jsvNewFromInteger(10000));
+    // Could try and take advertising length into account?
+  }
 #endif
 }

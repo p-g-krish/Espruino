@@ -26,6 +26,7 @@ void jsspiDumpSPIInfo(JshSPIInfo *inf) {
 
 void jsspiHardwareFunc(unsigned char *tx, unsigned char *rx, unsigned int len, spi_sender_data *info) {
   IOEventFlags device = *(IOEventFlags*)info;
+  jshSPISetReceive(device, rx!=NULL); // ensure we set if we want to receive or not, fix #2613
   jshSPISendMany(device, tx, rx, len, NULL/*no callback - sync*/);
 }
 
@@ -71,7 +72,7 @@ void jsspiSoftwareFunc(
         if (inf->pinSCK != PIN_UNDEFINED)
           jshPinSetValue(inf->pinSCK, !CPOL );
         if (inf->pinMISO != PIN_UNDEFINED)
-          result = (result<<1) | (jshPinGetValue(inf->pinMISO )?1:0);
+          result |= (jshPinGetValue(inf->pinMISO )?1:0)<<bit;
         if (inf->pinSCK != PIN_UNDEFINED)
           jshPinSetValue(inf->pinSCK, CPOL );
       } else { // CPHA=1
@@ -82,7 +83,7 @@ void jsspiSoftwareFunc(
         if (inf->pinSCK != PIN_UNDEFINED)
           jshPinSetValue(inf->pinSCK, CPOL );
         if (inf->pinMISO != PIN_UNDEFINED)
-          result = (result<<1) | (jshPinGetValue(inf->pinMISO )?1:0);
+          result |= (jshPinGetValue(inf->pinMISO )?1:0)<<bit;
       }
     }
     if (rx) rx[i] = result;
@@ -172,7 +173,7 @@ bool jsspiGetSendFunction(
   } else if (device == EV_NONE) {
     // Debug
     // jsiConsolePrintf("SPI is software\n");
-    JsVar *options = jsvObjectGetChild(spiDevice, DEVICE_OPTIONS_NAME, 0);
+    JsVar *options = jsvObjectGetChildIfExists(spiDevice, DEVICE_OPTIONS_NAME);
     jsspiPopulateSPIInfo(&inf, options);
     jsvUnLock(options);
 

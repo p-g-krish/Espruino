@@ -47,6 +47,15 @@
 #include "app_config.h"
 #endif
 
+// Changes needed whem moving from SDK 15.0.0 to 15.3.0
+#ifdef NRF5X_SDK_15_3
+#define APP_TIMER_SAFE_WINDOW_MS 300000
+#define NRF_DFU_SETTINGS_COMPATIBILITY_MODE 0
+#define NRF_BL_APP_SIGNATURE_CHECK_REQUIRED 0
+#define NRF_CRYPTO_BACKEND_MICRO_ECC_PUBLIC_KEY_TRUSTED_ENABLED 0
+#define NRF_CRYPTO_BACKEND_NRF_SW_HASH_LITTLE_ENDIAN_DIGEST_ENABLED 0
+#endif
+
 // <h> nRF_Bootloader
 
 //==========================================================
@@ -972,14 +981,14 @@
 // <i> Minimum GAP connection interval, in 1.25 ms units.
 
 #ifndef NRF_DFU_BLE_MIN_CONN_INTERVAL
-#define NRF_DFU_BLE_MIN_CONN_INTERVAL 12
+#define NRF_DFU_BLE_MIN_CONN_INTERVAL 6 // 7.5ms
 #endif
 
 // <o> NRF_DFU_BLE_MAX_CONN_INTERVAL - Maximum connection interval (units).
 // <i> Maximum GAP connection interval, in 1.25 ms units.
 
 #ifndef NRF_DFU_BLE_MAX_CONN_INTERVAL
-#define NRF_DFU_BLE_MAX_CONN_INTERVAL 12
+#define NRF_DFU_BLE_MAX_CONN_INTERVAL 24 // 30ms
 #endif
 
 // <o> NRF_DFU_BLE_CONN_SUP_TIMEOUT_MS - Supervision timeout (ms).
@@ -4584,12 +4593,12 @@
 // <2=> NRF_CLOCK_LF_SRC_SYNTH
 
 #ifndef NRF_SDH_CLOCK_LF_SRC
-#define NRF_SDH_CLOCK_LF_SRC 1
+#define NRF_SDH_CLOCK_LF_SRC 0
 #endif
 
 // <o> NRF_SDH_CLOCK_LF_RC_CTIV - SoftDevice calibration timer interval.
 #ifndef NRF_SDH_CLOCK_LF_RC_CTIV
-#define NRF_SDH_CLOCK_LF_RC_CTIV 0
+#define NRF_SDH_CLOCK_LF_RC_CTIV 16
 #endif
 
 // <o> NRF_SDH_CLOCK_LF_RC_TEMP_CTIV - SoftDevice calibration timer interval under constant temperature.
@@ -4597,7 +4606,7 @@
 // <i>  if the temperature has not changed.
 
 #ifndef NRF_SDH_CLOCK_LF_RC_TEMP_CTIV
-#define NRF_SDH_CLOCK_LF_RC_TEMP_CTIV 0
+#define NRF_SDH_CLOCK_LF_RC_TEMP_CTIV 2
 #endif
 
 // <o> NRF_SDH_CLOCK_LF_ACCURACY  - External clock accuracy used in the LL to compute timing.
@@ -4616,7 +4625,7 @@
 // <11=> NRF_CLOCK_LF_ACCURACY_1_PPM
 
 #ifndef NRF_SDH_CLOCK_LF_ACCURACY
-#define NRF_SDH_CLOCK_LF_ACCURACY 7
+#define NRF_SDH_CLOCK_LF_ACCURACY 0
 #endif
 
 // </h>

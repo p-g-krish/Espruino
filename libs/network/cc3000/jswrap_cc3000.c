@@ -132,7 +132,7 @@ bool jswrap_wlan_connect(JsVar *wlanObj, JsVar *vAP, JsVar *vKey, JsVar *callbac
   if (!networkGetFromVar(&net)) return false;
 
   // if previously completely disconnected, try and reconnect
-  if (jsvGetBoolAndUnLock(jsvObjectGetChild(wlanObj,JS_HIDDEN_CHAR_STR"DIS",0))) {
+  if (jsvObjectGetBoolChild(wlanObj,JS_HIDDEN_CHAR_STR"DIS")) {
     cc3000_initialise(wlanObj);
     jsvObjectSetChildAndUnLock(wlanObj,JS_HIDDEN_CHAR_STR"DIS", jsvNewFromBool(false));
   }
@@ -166,7 +166,8 @@ bool jswrap_wlan_connect(JsVar *wlanObj, JsVar *vAP, JsVar *vKey, JsVar *callbac
   "name" : "disconnect",
   "generate" : "jswrap_wlan_disconnect"
 }
-Completely uninitialise and power down the CC3000. After this you'll have to use ```require("CC3000").connect()``` again.
+Completely uninitialise and power down the CC3000. After this you'll have to use
+```require("CC3000").connect()``` again.
 */
 void jswrap_wlan_disconnect(JsVar *wlanObj) {
   JsNetwork net;
@@ -186,15 +187,16 @@ void jswrap_wlan_disconnect(JsVar *wlanObj) {
   "name" : "reconnect",
   "generate" : "jswrap_wlan_reconnect"
 }
-Completely uninitialise and power down the CC3000, then reconnect to the old access point.
+Completely uninitialise and power down the CC3000, then reconnect to the old
+access point.
 */
 void jswrap_wlan_reconnect(JsVar *wlanObj) {
   JsNetwork net;
   if (!networkGetFromVar(&net)) return;
 
-  JsVar *ap = jsvObjectGetChild(wlanObj,JS_HIDDEN_CHAR_STR"AP", 0);
-  JsVar *key = jsvObjectGetChild(wlanObj,JS_HIDDEN_CHAR_STR"KEY", 0);
-  JsVar *cb = jsvObjectGetChild(wlanObj,CC3000_ON_STATE_CHANGE, 0);
+  JsVar *ap = jsvObjectGetChildIfExists(wlanObj,JS_HIDDEN_CHAR_STR"AP");
+  JsVar *key = jsvObjectGetChildIfExists(wlanObj,JS_HIDDEN_CHAR_STR"KEY");
+  JsVar *cb = jsvObjectGetChildIfExists(wlanObj,CC3000_ON_STATE_CHANGE);
   jswrap_wlan_disconnect(wlanObj);
   jswrap_wlan_connect(wlanObj, ap, key, cb);
   jsvUnLock3(ap, key, cb);
@@ -243,7 +245,7 @@ JsVar *jswrap_wlan_getIP(JsVar *wlanObj) {
 
 
 static void _wlan_getIP_set_address(JsVar *options, char *name, unsigned char *ptr) {
-  JsVar *info = jsvObjectGetChild(options, name, 0);
+  JsVar *info = jsvObjectGetChildIfExists(options, name);
   if (info) {
     char buf[64];
     jsvGetString(info, buf, sizeof(buf));
@@ -258,13 +260,15 @@ static void _wlan_getIP_set_address(JsVar *options, char *name, unsigned char *p
   "name" : "setIP",
   "generate" : "jswrap_wlan_setIP",
   "params" : [
-    ["options","JsVar","Object containing IP address options `{ ip : '1,2,3,4', subnet, gateway, dns  }`, or do not supply an object in otder to force DHCP."]
+    ["options","JsVar","Object containing IP address options `{ ip : '1,2,3,4', subnet, gateway, dns }`, or do not supply an object in otder to force DHCP."]
   ],
   "return" : ["bool","True on success"]
 }
-Set the current IP address for get an IP from DHCP (if no options object is specified).
+Set the current IP address for get an IP from DHCP (if no options object is
+specified).
 
-**Note:** Changes are written to non-volatile memory, but will only take effect after calling `wlan.reconnect()`
+**Note:** Changes are written to non-volatile memory, but will only take effect
+after calling `wlan.reconnect()`
 */
 bool jswrap_wlan_setIP(JsVar *wlanObj, JsVar *options) {
   NOT_USED(wlanObj);

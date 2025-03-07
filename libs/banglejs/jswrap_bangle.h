@@ -15,13 +15,15 @@
 
 void jswrap_banglejs_lcdWr(JsVarInt cmd, JsVar *data);
 void jswrap_banglejs_setLCDPower(bool isOn);
-bool jswrap_banglejs_getLCDPower();
+void jswrap_banglejs_setLCDPowerBacklight(bool isOn);
 void jswrap_banglejs_setLCDBrightness(JsVarFloat v);
 void jswrap_banglejs_setLCDMode(JsVar *mode);
 JsVar *jswrap_banglejs_getLCDMode();
 void jswrap_banglejs_setLCDOffset(int y);
+void jswrap_banglejs_setLCDOverlay(JsVar *imgVar, JsVar *xv, int y, JsVar *options);
 void jswrap_banglejs_setLCDTimeout(JsVarFloat timeout);
 int jswrap_banglejs_isLCDOn();
+int jswrap_banglejs_isBacklightOn();
 void jswrap_banglejs_setLocked(bool isLocked);
 int jswrap_banglejs_isLocked();
 
@@ -51,6 +53,8 @@ JsVar *jswrap_banglejs_getPressure();
 JsVar *jswrap_banglejs_getHealthStatus();
 
 JsVar *jswrap_banglejs_dbg();
+void jswrap_banglejs_touchWr(JsVarInt reg, JsVarInt data);
+JsVar *jswrap_banglejs_touchRd(JsVarInt reg, JsVarInt cnt);
 void jswrap_banglejs_accelWr(JsVarInt reg, JsVarInt data);
 JsVar *jswrap_banglejs_accelRd(JsVarInt reg, JsVarInt cnt);
 void jswrap_banglejs_barometerWr(JsVarInt reg, JsVarInt data);
@@ -71,7 +75,7 @@ JsVar *jswrap_banglejs_buzz(int time, JsVarFloat amt);
 void jswrap_banglejs_off();
 void jswrap_banglejs_softOff();
 JsVar *jswrap_banglejs_getLogo();
-void jswrap_banglejs_factoryReset();
+void jswrap_banglejs_factoryReset(bool noReboot);
 
 JsVar *jswrap_banglejs_appRect();
 
@@ -81,7 +85,24 @@ void jswrap_banglejs_kill();
 bool jswrap_banglejs_idle();
 bool jswrap_banglejs_gps_character(char ch);
 
+/* If we're busy and really don't want to be interrupted (eg clearing flash memory)
+ then we should *NOT* allow the home button to set EXEC_INTERRUPTED (which happens
+ if it was held, JSBT_RESET was set, and then 0.5s later it wasn't handled).
+ */
+void jswrap_banglejs_kickPollWatchdog();
 
 #ifdef EMULATED
 extern void touchHandlerInternal(int tx, int ty, int pts, int gesture);
 #endif
+
+// Used when pushing events/retrieving events from the event queue
+typedef enum {
+  JSBE_HRM_ENV, // new HRM environment reading
+} JsBangleEvent;
+
+/// Called from jsinteractive when an event is parsed from the event queue for Bangle.js (executed outside IRQ)
+void jsbangle_exec_pending(uint8_t *data, int dataLen);
+/// queue an event for Bangle.js (usually called from inside an IRQ)
+void jsbangle_push_event(JsBangleEvent type, uint16_t value);
+
+void jswrap_banglejs_powerusage(JsVar *devices);
